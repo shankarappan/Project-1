@@ -147,9 +147,17 @@ async function getOrCreateSupabaseProject(token) {
   let orgId = process.env.SUPABASE_ORG_ID?.trim();
   if (!orgId) {
     const orgs = await supabaseRequest(token, "/organizations");
-    if (!orgs?.length) throw new Error("No Supabase organizations found.");
-    orgId = orgs[0].id;
-    log("supabase", `Using organization: ${orgs[0].name}`);
+    if (!orgs?.length) {
+      log("supabase", 'No organizations found — creating "Lets Split" organization...');
+      const createdOrg = await supabaseRequest(token, "/organizations", {
+        method: "POST",
+        body: JSON.stringify({ name: "Lets Split" }),
+      });
+      orgId = createdOrg.id;
+    } else {
+      orgId = orgs[0].id;
+      log("supabase", `Using organization: ${orgs[0].name}`);
+    }
   }
 
   const dbPass =
@@ -197,6 +205,17 @@ async function getOrCreateVercelProject(token, name) {
 }
 
 async function setVercelEnv(token, projectId, key, value, target = ["production", "preview", "development"]) {
+  const existing = await vercelRequest(token, `/v10/projects/${projectId}/env`);
+  const match = existing.envs?.find((env) => env.key === key);
+
+  if (match) {
+    await vercelRequest(token, `/v10/projects/${projectId}/env/${match.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ value, target }),
+    });
+    return;
+  }
+
   await vercelRequest(token, `/v10/projects/${projectId}/env`, {
     method: "POST",
     body: JSON.stringify({
