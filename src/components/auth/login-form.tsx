@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { signInWithMagicLink, signInWithGoogle } from "@/actions/auth";
+import { signInWithMagicLink } from "@/actions/auth";
 import { Mail, Globe } from "lucide-react";
 
 interface LoginFormProps {
@@ -37,10 +37,9 @@ export function LoginForm({ redirectTo = "/dashboard" }: LoginFormProps) {
 
   async function handleGoogle() {
     setError(null);
-    const result = await signInWithGoogle(redirectTo);
-    if (result?.error) {
-      setError(result.error);
-    }
+    setError(
+      "Google sign-in is not configured yet. Use the magic link option, or ask the admin to enable Google OAuth."
+    );
   }
 
   return (

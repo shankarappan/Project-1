@@ -119,19 +119,17 @@ async function runMigration(token, ref) {
 
 async function configureSupabaseAuth(token, ref, appUrl) {
   log("supabase", "Configuring auth redirect URLs...");
-  const current = await supabaseRequest(token, `/projects/${ref}/config/auth`);
-
-  const redirectUrls = new Set([
-    ...(current.additional_redirect_urls ?? []),
+  const redirectList = [
     `${appUrl}/auth/callback`,
+    "https://lets-split.vercel.app/auth/callback",
     "http://localhost:3000/auth/callback",
-  ]);
+  ].join(",");
 
   await supabaseRequest(token, `/projects/${ref}/config/auth`, {
     method: "PATCH",
     body: JSON.stringify({
       site_url: appUrl,
-      additional_redirect_urls: Array.from(redirectUrls),
+      uri_allow_list: redirectList,
     }),
   });
 }
