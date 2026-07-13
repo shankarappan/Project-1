@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { ensureProfile } from "@/lib/ensure-profile";
 import {
   aggregateGlobalLedger,
   buildBalanceLedger,
@@ -102,6 +103,8 @@ export async function createSettlement(groupId: string, formData: FormData) {
   if (!user) {
     return { error: "Not authenticated." };
   }
+
+  await ensureProfile(user);
 
   const payerId = String(formData.get("payer_id") ?? "");
   const receiverId = String(formData.get("receiver_id") ?? "");

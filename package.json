@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "provision": "node scripts/provision.mjs",
-    "setup:google-oauth": "node scripts/setup-google-oauth.mjs"
+    "setup:google-oauth": "node scripts/setup-google-oauth.mjs",
+    "test:e2e": "node --experimental-strip-types scripts/e2e-test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",

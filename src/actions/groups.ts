@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { ensureProfile } from "@/lib/ensure-profile";
 import { randomBytes } from "crypto";
 
 export async function createGroup(formData: FormData): Promise<void> {
@@ -14,6 +15,8 @@ export async function createGroup(formData: FormData): Promise<void> {
   if (!user) {
     throw new Error("Not authenticated.");
   }
+
+  await ensureProfile(user);
 
   const name = String(formData.get("name") ?? "").trim();
   if (!name) {

@@ -2,10 +2,8 @@ import Link from "next/link";
 import { AppNav } from "@/components/layout/app-nav";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { getCurrentProfile } from "@/actions/auth";
-import { createGroup } from "@/actions/groups";
+import { CreateGroupForm } from "@/components/groups/create-group-form";
 import { ArrowLeft } from "lucide-react";
 
 export default async function NewGroupPage() {
@@ -31,21 +29,7 @@ export default async function NewGroupPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <form action={createGroup} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="name">Group name</Label>
-                <Input
-                  id="name"
-                  name="name"
-                  placeholder="Weekend trip, Flat 4B, Office lunch..."
-                  required
-                  autoFocus
-                />
-              </div>
-              <Button type="submit" className="w-full">
-                Create group
-              </Button>
-            </form>
+            <CreateGroupForm />
           </CardContent>
         </Card>
       </main>

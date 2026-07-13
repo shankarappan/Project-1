@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { ensureProfile } from "@/lib/ensure-profile";
 import { calculateSplits, SplitValidationError } from "@/lib/splits/calculator";
 import type { SplitType } from "@/lib/types/database";
 
@@ -27,6 +28,8 @@ export async function createExpense(groupId: string, formData: FormData) {
   if (!user) {
     return { error: "Not authenticated." };
   }
+
+  await ensureProfile(user);
 
   const title = String(formData.get("title") ?? "").trim();
   const description = String(formData.get("description") ?? "").trim() || null;

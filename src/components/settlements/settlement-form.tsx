@@ -5,13 +5,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { createSettlement } from "@/actions/balances";
 import type { GroupMember } from "@/lib/types/database";
 import { toast } from "sonner";
@@ -23,9 +16,14 @@ interface SettlementFormProps {
 
 export function SettlementForm({ groupId, members }: SettlementFormProps) {
   const [loading, setLoading] = useState(false);
+  const [payerId, setPayerId] = useState(members[0]?.user_id ?? "");
+  const [receiverId, setReceiverId] = useState(members[1]?.user_id ?? members[0]?.user_id ?? "");
 
   async function handleSubmit(formData: FormData) {
     setLoading(true);
+    formData.set("payer_id", payerId);
+    formData.set("receiver_id", receiverId);
+
     const result = await createSettlement(groupId, formData);
     setLoading(false);
 
@@ -38,39 +36,50 @@ export function SettlementForm({ groupId, members }: SettlementFormProps) {
     (document.getElementById("settlement-form") as HTMLFormElement)?.reset();
   }
 
+  const selectClassName =
+    "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50";
+
   return (
     <form id="settlement-form" action={handleSubmit} className="space-y-4">
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2">
           <Label htmlFor="payer_id">Who paid?</Label>
-          <Select name="payer_id" required>
-            <SelectTrigger>
-              <SelectValue placeholder="Select payer" />
-            </SelectTrigger>
-            <SelectContent>
-              {members.map((member) => (
-                <SelectItem key={member.user_id} value={member.user_id}>
-                  {member.profiles?.full_name ?? member.profiles?.email}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <select
+            id="payer_id"
+            value={payerId}
+            onChange={(e) => setPayerId(e.target.value)}
+            required
+            className={selectClassName}
+          >
+            <option value="" disabled>
+              Select payer
+            </option>
+            {members.map((member) => (
+              <option key={member.user_id} value={member.user_id}>
+                {member.profiles?.full_name ?? member.profiles?.email}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="space-y-2">
           <Label htmlFor="receiver_id">Who received?</Label>
-          <Select name="receiver_id" required>
-            <SelectTrigger>
-              <SelectValue placeholder="Select receiver" />
-            </SelectTrigger>
-            <SelectContent>
-              {members.map((member) => (
-                <SelectItem key={member.user_id} value={member.user_id}>
-                  {member.profiles?.full_name ?? member.profiles?.email}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <select
+            id="receiver_id"
+            value={receiverId}
+            onChange={(e) => setReceiverId(e.target.value)}
+            required
+            className={selectClassName}
+          >
+            <option value="" disabled>
+              Select receiver
+            </option>
+            {members.map((member) => (
+              <option key={member.user_id} value={member.user_id}>
+                {member.profiles?.full_name ?? member.profiles?.email}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="space-y-2">
@@ -93,7 +102,7 @@ export function SettlementForm({ groupId, members }: SettlementFormProps) {
 
       <input type="hidden" name="currency" value="NZD" />
 
-      <Button type="submit" disabled={loading}>
+      <Button type="submit" disabled={loading || !payerId || !receiverId}>
         {loading ? "Recording..." : "Record settlement"}
       </Button>
     </form>

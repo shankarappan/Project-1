@@ -5,13 +5,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { createExpense } from "@/actions/expenses";
 import type { GroupMember, SplitType } from "@/lib/types/database";
 import { toast } from "sonner";
@@ -23,6 +16,7 @@ interface ExpenseFormProps {
 
 export function ExpenseForm({ groupId, members }: ExpenseFormProps) {
   const [splitType, setSplitType] = useState<SplitType>("equal");
+  const [paidBy, setPaidBy] = useState(members[0]?.user_id ?? "");
   const [selectedMembers, setSelectedMembers] = useState<string[]>(
     members.map((m) => m.user_id)
   );
@@ -40,6 +34,7 @@ export function ExpenseForm({ groupId, members }: ExpenseFormProps) {
     setLoading(true);
     selectedMembers.forEach((id) => formData.append("participant_ids", id));
     formData.set("split_type", splitType);
+    formData.set("paid_by", paidBy);
 
     const result = await createExpense(groupId, formData);
     setLoading(false);
@@ -83,18 +78,23 @@ export function ExpenseForm({ groupId, members }: ExpenseFormProps) {
 
         <div className="space-y-2 sm:col-span-2">
           <Label htmlFor="paid_by">Paid by</Label>
-          <Select name="paid_by" required>
-            <SelectTrigger>
-              <SelectValue placeholder="Who paid?" />
-            </SelectTrigger>
-            <SelectContent>
-              {members.map((member) => (
-                <SelectItem key={member.user_id} value={member.user_id}>
-                  {member.profiles?.full_name ?? member.profiles?.email ?? "Member"}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <select
+            id="paid_by"
+            name="paid_by"
+            value={paidBy}
+            onChange={(e) => setPaidBy(e.target.value)}
+            required
+            className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          >
+            <option value="" disabled>
+              Who paid?
+            </option>
+            {members.map((member) => (
+              <option key={member.user_id} value={member.user_id}>
+                {member.profiles?.full_name ?? member.profiles?.email ?? "Member"}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="space-y-2 sm:col-span-2">
