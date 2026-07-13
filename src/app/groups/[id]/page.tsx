@@ -1,11 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { AppNav } from "@/components/layout/app-nav";
+import { AppShell } from "@/components/layout/app-shell";
 import { BalanceSummary } from "@/components/groups/balance-summary";
 import { ExpenseList } from "@/components/expenses/expense-list";
 import { InviteDialog } from "@/components/groups/invite-dialog";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { getCurrentProfile, getCurrentUser } from "@/actions/auth";
 import { getGroup } from "@/actions/groups";
@@ -34,20 +33,18 @@ export default async function GroupDetailPage({
   const members = (group.group_members as GroupMember[]) ?? [];
 
   return (
-    <div className="min-h-screen bg-muted/20">
-      <AppNav profile={profile} />
-
-      <main className="mx-auto max-w-6xl space-y-6 px-4 py-8 sm:px-6">
+    <AppShell profile={profile}>
+      <div className="space-y-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <Button variant="ghost" size="sm" asChild className="mb-2 -ml-2">
+            <Button variant="ghost" size="sm" asChild className="mb-3 -ml-2 text-brand-muted">
               <Link href="/dashboard">
                 <ArrowLeft className="mr-2 h-4 w-4" />
                 Dashboard
               </Link>
             </Button>
-            <h1 className="text-2xl font-bold">{group.name}</h1>
-            <p className="text-sm text-muted-foreground">
+            <h1 className="text-3xl font-bold tracking-tight">{group.name}</h1>
+            <p className="mt-1 text-sm text-brand-muted">
               {members.length} member{members.length !== 1 ? "s" : ""}
             </p>
           </div>
@@ -60,7 +57,7 @@ export default async function GroupDetailPage({
                 Settle up
               </Link>
             </Button>
-            <Button size="sm" asChild>
+            <Button size="sm" asChild className="bg-brand-blue hover:bg-brand-blue/90">
               <Link href={`/groups/${id}/expenses/new`}>
                 <Plus className="mr-2 h-4 w-4" />
                 Add expense
@@ -70,56 +67,42 @@ export default async function GroupDetailPage({
         </div>
 
         <div className="grid gap-6 lg:grid-cols-3">
-          <Card className="lg:col-span-1">
-            <CardHeader>
-              <CardTitle className="text-base">Members</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ul className="space-y-2">
-                {members.map((member) => (
-                  <li key={member.id} className="flex items-center gap-2">
-                    <Avatar className="h-8 w-8">
-                      <AvatarFallback className="bg-muted text-xs">
-                        {getInitials(
-                          member.profiles?.full_name,
-                          member.profiles?.email
-                        )}
-                      </AvatarFallback>
-                    </Avatar>
-                    <span className="text-sm">
-                      {member.profiles?.full_name ?? member.profiles?.email}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </CardContent>
-          </Card>
+          <section className="rounded-2xl border border-border/80 bg-card p-6 shadow-card lg:col-span-1">
+            <h2 className="font-semibold">Members</h2>
+            <ul className="mt-4 space-y-3">
+              {members.map((member) => (
+                <li key={member.id} className="flex items-center gap-3">
+                  <Avatar className="h-9 w-9">
+                    <AvatarFallback className="bg-brand-teal/10 text-xs font-semibold text-brand-teal">
+                      {getInitials(
+                        member.profiles?.full_name,
+                        member.profiles?.email
+                      )}
+                    </AvatarFallback>
+                  </Avatar>
+                  <span className="text-sm font-medium text-brand-navy">
+                    {member.profiles?.full_name ?? member.profiles?.email}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
 
-          <Card className="lg:col-span-2">
-            <CardHeader>
-              <CardTitle className="text-base">Balances</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <BalanceSummary
-                balances={balances}
-                currentUserId={user?.id}
-              />
-            </CardContent>
-          </Card>
+          <section className="rounded-2xl border border-border/80 bg-card p-6 shadow-card lg:col-span-2">
+            <h2 className="font-semibold">Balances</h2>
+            <div className="mt-4">
+              <BalanceSummary balances={balances} currentUserId={user?.id} />
+            </div>
+          </section>
         </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Expenses</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ExpenseList
-              expenses={expenses as Expense[]}
-              groupId={id}
-            />
-          </CardContent>
-        </Card>
-      </main>
-    </div>
+        <section className="rounded-2xl border border-border/80 bg-card p-6 shadow-card">
+          <h2 className="font-semibold">Expenses</h2>
+          <div className="mt-4">
+            <ExpenseList expenses={expenses as Expense[]} groupId={id} />
+          </div>
+        </section>
+      </div>
+    </AppShell>
   );
 }

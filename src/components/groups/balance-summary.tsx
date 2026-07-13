@@ -1,5 +1,4 @@
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { formatCurrency } from "@/lib/format";
 import { describeBalance } from "@/lib/balance/engine";
 import { getInitials } from "@/lib/format";
@@ -18,9 +17,12 @@ export function BalanceSummary({
 }: BalanceSummaryProps) {
   if (balances.length === 0) {
     return (
-      <p className="text-sm text-muted-foreground">
-        Everyone is settled up in this group.
-      </p>
+      <div className="rounded-xl border border-dashed border-border/80 bg-muted/20 px-4 py-8 text-center">
+        <p className="text-sm font-medium text-brand-navy">All settled up</p>
+        <p className="mt-1 text-xs text-brand-muted">
+          No outstanding balances in this group.
+        </p>
+      </div>
     );
   }
 
@@ -29,35 +31,35 @@ export function BalanceSummary({
       {balances.map((entry) => (
         <li
           key={entry.user_id}
-          className="flex items-center justify-between rounded-lg border px-3 py-2"
+          className="flex items-center justify-between rounded-xl border border-border/60 bg-background/60 px-4 py-3"
         >
           <div className="flex items-center gap-3">
-            <Avatar className="h-8 w-8">
-              <AvatarFallback className="bg-muted text-xs">
+            <Avatar className="h-9 w-9 ring-2 ring-border/40">
+              <AvatarFallback className="bg-brand-blue/10 text-xs font-semibold text-brand-blue">
                 {getInitials(entry.full_name, entry.email)}
               </AvatarFallback>
             </Avatar>
             <div>
-              <p className="text-sm font-medium">
+              <p className="text-sm font-medium text-brand-navy">
                 {entry.full_name ?? entry.email}
                 {entry.user_id === currentUserId && (
-                  <Badge variant="outline" className="ml-2 text-xs">
-                    You
-                  </Badge>
+                  <span className="ml-2 text-xs font-normal text-brand-muted">
+                    (you)
+                  </span>
                 )}
               </p>
-              <p className="text-xs text-muted-foreground">
+              <p className="text-xs text-brand-muted">
                 {describeBalance(entry.balance)}
               </p>
             </div>
           </div>
           <p
-            className={`text-sm font-semibold ${
+            className={`text-sm font-bold ${
               entry.balance > 0
-                ? "text-emerald-600"
+                ? "text-balance-positive"
                 : entry.balance < 0
-                  ? "text-red-500"
-                  : ""
+                  ? "text-balance-negative"
+                  : "text-brand-navy"
             }`}
           >
             {formatCurrency(Math.abs(entry.balance), currency)}

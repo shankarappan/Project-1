@@ -1,6 +1,5 @@
 import Link from "next/link";
-import { Users } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Users, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 
@@ -30,22 +29,29 @@ export function GroupList({ groups }: GroupListProps) {
   }
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
+    <div className="space-y-2">
       {groups.map((group) => (
-        <Link key={group.id} href={`/groups/${group.id}`}>
-          <Card className="transition-colors hover:bg-muted/50">
-            <CardHeader className="flex flex-row items-center gap-3 pb-2">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700">
-                <Users className="h-5 w-5" />
-              </div>
-              <CardTitle className="text-base">{group.name}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-xs text-muted-foreground">
-                Created {new Date(group.created_at).toLocaleDateString()}
-              </p>
-            </CardContent>
-          </Card>
+        <Link
+          key={group.id}
+          href={`/groups/${group.id}`}
+          className="group flex items-center gap-4 rounded-xl border border-border/80 bg-card p-4 shadow-sm transition-all hover:border-brand-blue/30 hover:shadow-card"
+        >
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand-teal/20 to-brand-blue/20 text-brand-blue">
+            <Users className="h-5 w-5" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="font-semibold text-brand-navy group-hover:text-brand-blue">
+              {group.name}
+            </p>
+            <p className="text-xs text-brand-muted">
+              Created {new Date(group.created_at).toLocaleDateString("en-NZ", {
+                day: "numeric",
+                month: "short",
+                year: "numeric",
+              })}
+            </p>
+          </div>
+          <ChevronRight className="h-4 w-4 text-brand-muted transition-transform group-hover:translate-x-0.5 group-hover:text-brand-blue" />
         </Link>
       ))}
     </div>

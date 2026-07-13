@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { signInWithMagicLink } from "@/actions/auth";
-import { Mail, Globe } from "lucide-react";
+import { Mail } from "lucide-react";
 
 interface LoginFormProps {
   redirectTo?: string;
@@ -35,18 +35,13 @@ export function LoginForm({ redirectTo = "/dashboard" }: LoginFormProps) {
     }
   }
 
-  async function handleGoogle() {
-    setError(null);
-    setError(
-      "Google sign-in is not configured yet. Use the magic link option, or ask the admin to enable Google OAuth."
-    );
-  }
-
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <form action={handleMagicLink} className="space-y-4">
         <div className="space-y-2">
-          <Label htmlFor="email">Email</Label>
+          <Label htmlFor="email" className="text-brand-navy">
+            Email address
+          </Label>
           <Input
             id="email"
             name="email"
@@ -54,31 +49,22 @@ export function LoginForm({ redirectTo = "/dashboard" }: LoginFormProps) {
             placeholder="you@example.com"
             required
             autoComplete="email"
+            className="h-11 border-border/80 bg-background"
           />
         </div>
-        <Button type="submit" className="w-full" disabled={loading}>
+        <Button
+          type="submit"
+          className="h-11 w-full bg-brand-blue text-base hover:bg-brand-blue/90"
+          disabled={loading}
+        >
           <Mail className="mr-2 h-4 w-4" />
           {loading ? "Sending link..." : "Send magic link"}
         </Button>
       </form>
 
-      <div className="relative">
-        <div className="absolute inset-0 flex items-center">
-          <span className="w-full border-t" />
-        </div>
-        <div className="relative flex justify-center text-xs uppercase">
-          <span className="bg-card px-2 text-muted-foreground">Or continue with</span>
-        </div>
-      </div>
-
-      <Button variant="outline" className="w-full" onClick={handleGoogle} type="button">
-        <Globe className="mr-2 h-4 w-4" />
-        Google
-      </Button>
-
       {message && (
-        <Alert>
-          <AlertDescription>{message}</AlertDescription>
+        <Alert className="border-brand-teal/30 bg-brand-teal/5">
+          <AlertDescription className="text-brand-navy">{message}</AlertDescription>
         </Alert>
       )}
 
