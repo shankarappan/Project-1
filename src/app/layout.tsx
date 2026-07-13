@@ -10,13 +10,49 @@ const jakarta = Plus_Jakarta_Sans({
   weight: ["400", "500", "600", "700"],
 });
 
+const siteUrl =
+  process.env.NEXT_PUBLIC_APP_URL ?? "https://lets-split-khaki.vercel.app";
+
 export const metadata: Metadata = {
+  metadataBase: new URL(siteUrl),
   title: "Lets Split — One off spending. Clearly split.",
   description:
     "Split shared expenses with groups, track balances, and settle up — clearly and fairly.",
+  applicationName: "Lets Split",
   icons: {
-    icon: "/logo.svg",
-    apple: "/logo.svg",
+    icon: [
+      { url: "/favicon.ico", sizes: "32x32" },
+      { url: "/favicon-32.png", sizes: "32x32", type: "image/png" },
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: [{ url: "/apple-icon.png", sizes: "180x180", type: "image/png" }],
+    shortcut: ["/favicon.ico"],
+  },
+  openGraph: {
+    type: "website",
+    locale: "en_NZ",
+    url: siteUrl,
+    siteName: "Lets Split",
+    title: "Lets Split — One off spending. Clearly split.",
+    description:
+      "Split shared expenses with groups, track balances, and settle up — clearly and fairly.",
+    images: [
+      {
+        url: "/og.png",
+        width: 1200,
+        height: 630,
+        alt: "Lets Split logo",
+        type: "image/png",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Lets Split — One off spending. Clearly split.",
+    description:
+      "Split shared expenses with groups, track balances, and settle up — clearly and fairly.",
+    images: ["/og.png"],
   },
 };
 
