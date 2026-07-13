@@ -124,14 +124,31 @@ npm run provision
 
 ### Option C: GitHub Actions
 
-Add these repository secrets, then push to `main`:
+Add this repository secret, then pushes to `main` auto-deploy via Vercel:
 
-- `VERCEL_TOKEN`
-- `VERCEL_ORG_ID`
-- `VERCEL_PROJECT_ID`
-- `NEXT_PUBLIC_SUPABASE_URL`
-- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-- `NEXT_PUBLIC_APP_URL`
+- `VERCEL_TOKEN` — from https://vercel.com/account/tokens
+
+Optional secrets (only if not already set on the Vercel project):
+
+- `VERCEL_ORG_ID` — `team_y8J9l31Zrw2AcUljLqiOAHWW`
+- `VERCEL_PROJECT_ID` — `prj_D0P5T7WOsv6cb7cnOER3NDnWZ010`
+
+### Google OAuth
+
+1. In [Google Cloud Console](https://console.cloud.google.com/apis/credentials), create an OAuth 2.0 Client ID (Web application).
+2. Add authorized redirect URI:
+   ```
+   https://bdtbqwipwyitqsflvphk.supabase.co/auth/v1/callback
+   ```
+3. Run:
+   ```bash
+   export SUPABASE_ACCESS_TOKEN=your-token
+   export GOOGLE_CLIENT_ID=your-client-id
+   export GOOGLE_CLIENT_SECRET=your-client-secret
+   npm run setup:google-oauth
+   ```
+
+Or enable manually in Supabase Dashboard → Authentication → Providers → Google.
 
 ## Project structure
 
