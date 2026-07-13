@@ -101,6 +101,18 @@ For multi-user demo data, adapt `supabase/seed.sql` with real user UUIDs from `a
 
 ## Deploy to Vercel
 
+### Option A: One-command provisioning (recommended)
+
+If you have API tokens, this script creates the Supabase project, runs migrations, configures auth redirects, sets Vercel env vars, and deploys:
+
+```bash
+export SUPABASE_ACCESS_TOKEN=your-supabase-token   # https://supabase.com/dashboard/account/tokens
+export VERCEL_TOKEN=your-vercel-token             # https://vercel.com/account/tokens
+npm run provision
+```
+
+### Option B: Manual setup
+
 1. Push the repo to GitHub.
 2. Import the project in [Vercel](https://vercel.com).
 3. Add environment variables:
@@ -109,6 +121,17 @@ For multi-user demo data, adapt `supabase/seed.sql` with real user UUIDs from `a
    - `NEXT_PUBLIC_APP_URL` (your Vercel URL, e.g. `https://lets-split.vercel.app`)
 4. Deploy.
 5. Update Supabase auth redirect URLs to include your production callback URL.
+
+### Option C: GitHub Actions
+
+Add these repository secrets, then push to `main`:
+
+- `VERCEL_TOKEN`
+- `VERCEL_ORG_ID`
+- `VERCEL_PROJECT_ID`
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `NEXT_PUBLIC_APP_URL`
 
 ## Project structure
 
