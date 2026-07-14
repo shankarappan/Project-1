@@ -1,10 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, getAuthUser } from "@/lib/supabase/cached";
 import { ensureProfile } from "@/lib/ensure-profile";
 import {
-  aggregateGlobalLedger,
   buildBalanceLedger,
   summarizeBalances,
   summarizeForUser,
@@ -14,23 +13,21 @@ import type { Expense, Profile, Settlement } from "@/lib/types/database";
 export async function getGroupBalances(groupId: string) {
   const supabase = await createClient();
 
-  const { data: expenses } = await supabase
-    .from("expenses")
-    .select(
-      `*,
-      expense_participants (id, user_id, share_amount, share_percentage)`
-    )
-    .eq("group_id", groupId);
-
-  const { data: settlements } = await supabase
-    .from("settlements")
-    .select("*")
-    .eq("group_id", groupId);
-
-  const { data: members } = await supabase
-    .from("group_members")
-    .select("profiles (id, email, full_name, avatar_url)")
-    .eq("group_id", groupId);
+  const [{ data: expenses }, { data: settlements }, { data: members }] =
+    await Promise.all([
+      supabase
+        .from("expenses")
+        .select(
+          `*,
+          expense_participants (id, user_id, share_amount, share_percentage)`
+        )
+        .eq("group_id", groupId),
+      supabase.from("settlements").select("*").eq("group_id", groupId),
+      supabase
+        .from("group_members")
+        .select("profiles (id, email, full_name, avatar_url)")
+        .eq("group_id", groupId),
+    ]);
 
   const profiles =
     members
@@ -50,14 +47,12 @@ export async function getGroupBalances(groupId: string) {
 }
 
 export async function getDashboardBalances() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
+  const user = await getAuthUser();
   if (!user) {
     return { totalOwed: 0, totalOwing: 0, netBalance: 0 };
   }
+
+  const supabase = await createClient();
 
   const { data: memberships } = await supabase
     .from("group_members")
@@ -69,42 +64,31 @@ export async function getDashboardBalances() {
     return { totalOwed: 0, totalOwing: 0, netBalance: 0 };
   }
 
-  const ledgers: Map<string, number>[] = [];
-
-  for (const groupId of groupIds) {
-    const { data: expenses } = await supabase
+  // Batch: one expenses query + one settlements query instead of N+1
+  const [{ data: expenses }, { data: settlements }] = await Promise.all([
+    supabase
       .from("expenses")
       .select(`*, expense_participants (id, user_id, share_amount)`)
-      .eq("group_id", groupId);
+      .in("group_id", groupIds),
+    supabase.from("settlements").select("*").in("group_id", groupIds),
+  ]);
 
-    const { data: settlements } = await supabase
-      .from("settlements")
-      .select("*")
-      .eq("group_id", groupId);
+  const ledger = buildBalanceLedger(
+    (expenses as Expense[]) ?? [],
+    (settlements as Settlement[]) ?? []
+  );
 
-    ledgers.push(
-      buildBalanceLedger(
-        (expenses as Expense[]) ?? [],
-        (settlements as Settlement[]) ?? []
-      )
-    );
-  }
-
-  const globalLedger = aggregateGlobalLedger(ledgers);
-  return summarizeForUser(globalLedger, user.id);
+  return summarizeForUser(ledger, user.id);
 }
 
 export async function createSettlement(groupId: string, formData: FormData) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
+  const user = await getAuthUser();
   if (!user) {
     return { error: "Not authenticated." };
   }
 
   await ensureProfile(user);
+  const supabase = await createClient();
 
   const payerId = String(formData.get("payer_id") ?? "");
   const receiverId = String(formData.get("receiver_id") ?? "");

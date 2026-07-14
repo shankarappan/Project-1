@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, getAuthUser } from "@/lib/supabase/cached";
 
 export async function signInWithMagicLink(formData: FormData) {
   const email = String(formData.get("email") ?? "").trim();
@@ -58,21 +58,14 @@ export async function signOut() {
 }
 
 export async function getCurrentUser() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  return user;
+  return getAuthUser();
 }
 
 export async function getCurrentProfile() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
+  const user = await getAuthUser();
   if (!user) return null;
 
+  const supabase = await createClient();
   const { data } = await supabase
     .from("profiles")
     .select("*")
@@ -83,16 +76,13 @@ export async function getCurrentProfile() {
 }
 
 export async function updateProfile(formData: FormData): Promise<void> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
+  const user = await getAuthUser();
   if (!user) {
     throw new Error("Not authenticated.");
   }
 
   const fullName = String(formData.get("full_name") ?? "").trim();
+  const supabase = await createClient();
 
   const { error } = await supabase
     .from("profiles")
@@ -108,15 +98,12 @@ export async function updateProfile(formData: FormData): Promise<void> {
 }
 
 export async function seedDemoData() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
+  const user = await getAuthUser();
   if (!user) {
     return { error: "Not authenticated." };
   }
 
+  const supabase = await createClient();
   const { error } = await supabase.rpc("seed_demo_for_user", {
     target_user: user.id,
   });

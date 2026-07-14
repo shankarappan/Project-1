@@ -2,21 +2,18 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, getAuthUser } from "@/lib/supabase/cached";
 import { ensureProfile } from "@/lib/ensure-profile";
 import { randomBytes } from "crypto";
 
 export async function createGroup(formData: FormData): Promise<void> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
+  const user = await getAuthUser();
   if (!user) {
     throw new Error("Not authenticated.");
   }
 
   await ensureProfile(user);
+  const supabase = await createClient();
 
   const name = String(formData.get("name") ?? "").trim();
   if (!name) {
@@ -48,13 +45,10 @@ export async function createGroup(formData: FormData): Promise<void> {
 }
 
 export async function getUserGroups() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
+  const user = await getAuthUser();
   if (!user) return [];
 
+  const supabase = await createClient();
   const { data: memberships } = await supabase
     .from("group_members")
     .select("group_id, groups(id, name, created_at, created_by)")
@@ -97,14 +91,12 @@ export async function getGroup(groupId: string) {
 }
 
 export async function createInvite(groupId: string, email?: string) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
+  const user = await getAuthUser();
   if (!user) {
     return { error: "Not authenticated." };
   }
+
+  const supabase = await createClient();
 
   const inviteToken = randomBytes(24).toString("hex");
   const expiresAt = new Date();
@@ -133,14 +125,13 @@ export async function createInvite(groupId: string, email?: string) {
 }
 
 export async function acceptInvite(token: string) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) {
     redirect(`/login?redirect=/invite/${token}`);
   }
+
+  const supabase = await createClient();
 
   const { data: invite, error } = await supabase
     .from("invites")

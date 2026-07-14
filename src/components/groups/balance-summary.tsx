@@ -1,7 +1,6 @@
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { getInitials } from "@/lib/format";
 import { formatCurrency } from "@/lib/format";
 import { describeBalance } from "@/lib/balance/engine";
-import { getInitials } from "@/lib/format";
 import type { UserBalance } from "@/lib/types/database";
 
 interface BalanceSummaryProps {
@@ -34,11 +33,9 @@ export function BalanceSummary({
           className="flex items-center justify-between rounded-xl border border-border/60 bg-background/60 px-4 py-3"
         >
           <div className="flex items-center gap-3">
-            <Avatar className="h-9 w-9 ring-2 ring-border/40">
-              <AvatarFallback className="bg-brand-blue/10 text-xs font-semibold text-brand-blue">
-                {getInitials(entry.full_name, entry.email)}
-              </AvatarFallback>
-            </Avatar>
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-brand-blue/10 text-xs font-semibold text-brand-blue ring-2 ring-border/40">
+              {getInitials(entry.full_name, entry.email)}
+            </div>
             <div>
               <p className="text-sm font-medium text-brand-navy">
                 {entry.full_name ?? entry.email}

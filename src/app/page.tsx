@@ -3,6 +3,9 @@ import { LogoLockup } from "@/components/brand/logo-lockup";
 import { Button } from "@/components/ui/button";
 import { Users, Receipt, Scale, ArrowRight, Sparkles } from "lucide-react";
 
+export const dynamic = "force-static";
+export const revalidate = 3600;
+
 export default function LandingPage() {
   return (
     <div className="min-h-screen bg-hero-gradient">

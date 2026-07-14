@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, getAuthUser } from "@/lib/supabase/cached";
 import { ensureProfile } from "@/lib/ensure-profile";
 import { calculateSplits, SplitValidationError } from "@/lib/splits/calculator";
 import type { SplitType } from "@/lib/types/database";
@@ -20,16 +20,14 @@ interface ParticipantInput {
 }
 
 export async function createExpense(groupId: string, formData: FormData) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) {
     return { error: "Not authenticated." };
   }
 
   await ensureProfile(user);
+  const supabase = await createClient();
 
   const title = String(formData.get("title") ?? "").trim();
   const description = String(formData.get("description") ?? "").trim() || null;
@@ -112,14 +110,13 @@ export async function createExpense(groupId: string, formData: FormData) {
 }
 
 export async function updateExpense(expenseId: string, groupId: string, formData: FormData) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const user = await getAuthUser();
 
   if (!user) {
     return { error: "Not authenticated." };
   }
+
+  const supabase = await createClient();
 
   const title = String(formData.get("title") ?? "").trim();
   const description = String(formData.get("description") ?? "").trim() || null;
@@ -259,12 +256,10 @@ export async function getExpense(expenseId: string) {
 }
 
 export async function getRecentActivity(limit = 10) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
+  const user = await getAuthUser();
   if (!user) return [];
+
+  const supabase = await createClient();
 
   const { data: memberships } = await supabase
     .from("group_members")
@@ -274,19 +269,20 @@ export async function getRecentActivity(limit = 10) {
   const groupIds = memberships?.map((m) => m.group_id) ?? [];
   if (groupIds.length === 0) return [];
 
-  const { data: expenses } = await supabase
-    .from("expenses")
-    .select("id, title, amount, currency, group_id, created_at, created_by, groups(name), profiles!expenses_created_by_fkey(full_name)")
-    .in("group_id", groupIds)
-    .order("created_at", { ascending: false })
-    .limit(limit);
-
-  const { data: settlements } = await supabase
-    .from("settlements")
-    .select("id, amount, currency, group_id, settled_at, created_by, groups(name), profiles!settlements_created_by_fkey(full_name)")
-    .in("group_id", groupIds)
-    .order("settled_at", { ascending: false })
-    .limit(limit);
+  const [{ data: expenses }, { data: settlements }] = await Promise.all([
+    supabase
+      .from("expenses")
+      .select("id, title, amount, currency, group_id, created_at, created_by, groups(name), profiles!expenses_created_by_fkey(full_name)")
+      .in("group_id", groupIds)
+      .order("created_at", { ascending: false })
+      .limit(limit),
+    supabase
+      .from("settlements")
+      .select("id, amount, currency, group_id, settled_at, created_by, groups(name), profiles!settlements_created_by_fkey(full_name)")
+      .in("group_id", groupIds)
+      .order("settled_at", { ascending: false })
+      .limit(limit),
+  ]);
 
   const expenseItems =
     expenses?.map((e) => ({
