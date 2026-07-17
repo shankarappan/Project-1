@@ -4,18 +4,32 @@ import userEvent from "@testing-library/user-event";
 import { LoginForm } from "./login-form";
 
 const signInWithMagicLink = vi.fn();
+const signInWithOAuthProvider = vi.fn();
 
 vi.mock("@/actions/auth", () => ({
   signInWithMagicLink: (...args: unknown[]) => signInWithMagicLink(...args),
+  signInWithOAuthProvider: (...args: unknown[]) =>
+    signInWithOAuthProvider(...args),
 }));
 
 describe("LoginForm", () => {
   beforeEach(() => {
     signInWithMagicLink.mockReset();
+    signInWithOAuthProvider.mockReset();
   });
 
   afterEach(() => {
     cleanup();
+  });
+
+  it("shows SSO buttons for Google and Apple", () => {
+    render(<LoginForm />);
+    expect(
+      screen.getByRole("button", { name: /continue with google/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /continue with apple/i })
+    ).toBeInTheDocument();
   });
 
   it("shows inline error for empty email and sets aria-invalid", async () => {

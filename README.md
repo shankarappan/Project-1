@@ -74,16 +74,60 @@ This creates all tables, triggers, RLS policies, and the demo seed function.
 - In Supabase → Authentication → URL Configuration, set Site URL to `http://localhost:3000`.
 - Add redirect URL: `http://localhost:3000/auth/callback`
 
-**Google OAuth (optional)**
+**SSO / OAuth (Google, Apple)**
+
+Lets Split uses Supabase Auth’s industry-standard OAuth 2.0 / OpenID Connect providers (same pattern as most production apps). Magic link stays available as a fallback.
+
+| Provider | App UI | Needs external console |
+| --- | --- | --- |
+| Magic link | Yes | Supabase email only |
+| Google | Continue with Google | Google Cloud OAuth client |
+| Apple | Continue with Apple | Apple Developer Program + Services ID |
+
+Toggle which buttons appear with:
+
+```bash
+# .env.local / Vercel env
+NEXT_PUBLIC_AUTH_PROVIDERS=magic,google,apple
+```
+
+**Google OAuth**
 
 1. Create OAuth credentials in [Google Cloud Console](https://console.cloud.google.com/).
-2. Add authorized redirect URI from Supabase (Authentication → Providers → Google).
-3. Add Client ID and Secret in Supabase Google provider settings.
-4. Redirect URLs:
-   - Local: `http://localhost:3000/auth/callback`
-   - Production: `https://your-app.vercel.app/auth/callback`
+2. Authorized redirect URI (Supabase, not your app URL):
+   ```
+   https://bdtbqwipwyitqsflvphk.supabase.co/auth/v1/callback
+   ```
+3. Enable in Supabase → Authentication → Providers → Google, **or**:
+   ```bash
+   export SUPABASE_ACCESS_TOKEN=...
+   export GOOGLE_CLIENT_ID=...
+   export GOOGLE_CLIENT_SECRET=...
+   npm run setup:google-oauth
+   ```
+4. Ensure app redirect allow-list includes:
+   - `http://localhost:3000/auth/callback`
+   - `https://lets-split-khaki.vercel.app/auth/callback`
 
-The app works fully with magic link only if Google credentials are not configured.
+**Apple Sign In**
+
+1. Apple Developer → enable Sign In with Apple on an App ID.
+2. Create a **Services ID**, set domains, and return URL:
+   ```
+   https://bdtbqwipwyitqsflvphk.supabase.co/auth/v1/callback
+   ```
+3. Create a Sign In with Apple key (`.p8`), then generate the client secret JWT (see Supabase Apple provider docs).
+4. Enable in Supabase → Authentication → Providers → Apple, **or**:
+   ```bash
+   export SUPABASE_ACCESS_TOKEN=...
+   export APPLE_CLIENT_ID=com.your.service.id
+   export APPLE_SECRET=your-generated-jwt
+   npm run setup:apple-oauth
+   ```
+
+Until a provider is enabled in Supabase, its button still shows but returns a clear “not enabled yet” message.
+
+The app works fully with magic link only if Google/Apple credentials are not configured.
 
 ### 6. Start the dev server
 
@@ -149,6 +193,20 @@ Optional secrets (only if not already set on the Vercel project):
    ```
 
 Or enable manually in Supabase Dashboard → Authentication → Providers → Google.
+
+### Apple Sign In
+
+1. Configure Sign In with Apple (Services ID + key) in Apple Developer.
+2. Return URL must be the Supabase callback above.
+3. Run:
+   ```bash
+   export SUPABASE_ACCESS_TOKEN=your-token
+   export APPLE_CLIENT_ID=com.your.service.id
+   export APPLE_SECRET=your-client-secret-jwt
+   npm run setup:apple-oauth
+   ```
+
+Or enable manually in Supabase Dashboard → Authentication → Providers → Apple.
 
 ## Project structure
 

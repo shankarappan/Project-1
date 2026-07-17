@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "provision": "node scripts/provision.mjs",
     "setup:google-oauth": "node scripts/setup-google-oauth.mjs",
+    "setup:apple-oauth": "node scripts/setup-apple-oauth.mjs",
     "test:e2e": "node --experimental-strip-types scripts/e2e-test.mjs",
     "test:all": "npm run test && npm run test:e2e"
   },

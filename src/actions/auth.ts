@@ -5,6 +5,10 @@ import { redirect } from "next/navigation";
 import { createClient, getAuthUser } from "@/lib/supabase/cached";
 import { mapAuthServiceError, validateEmail } from "@/lib/auth/email";
 import { ensureProfile } from "@/lib/ensure-profile";
+import {
+  oauthProviderLabel,
+  type OAuthProvider,
+} from "@/lib/auth/oauth";
 import { logger } from "@/lib/logging/logger";
 
 export async function signInWithMagicLink(formData: FormData) {
@@ -47,19 +51,46 @@ export async function signInWithMagicLink(formData: FormData) {
   }
 }
 
-export async function signInWithGoogle(redirectTo = "/dashboard") {
+export async function signInWithOAuthProvider(
+  provider: OAuthProvider,
+  redirectTo = "/dashboard"
+) {
   const supabase = await createClient();
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  const safeRedirect = redirectTo.startsWith("/") ? redirectTo : "/dashboard";
 
   const { data, error } = await supabase.auth.signInWithOAuth({
-    provider: "google",
+    provider,
     options: {
-      redirectTo: `${appUrl}/auth/callback?redirect=${encodeURIComponent(redirectTo)}`,
+      redirectTo: `${appUrl}/auth/callback?redirect=${encodeURIComponent(safeRedirect)}`,
+      queryParams:
+        provider === "google"
+          ? {
+              access_type: "offline",
+              prompt: "select_account",
+            }
+          : undefined,
     },
   });
 
   if (error) {
-    logger.warn("google_oauth_failed", { name: error.name });
+    logger.warn("oauth_sign_in_failed", {
+      provider,
+      name: error.name,
+      code: error.status ?? "unknown",
+    });
+
+    const lower = error.message.toLowerCase();
+    if (
+      lower.includes("not enabled") ||
+      lower.includes("unsupported provider") ||
+      lower.includes("provider is not enabled")
+    ) {
+      return {
+        error: `${oauthProviderLabel(provider)} sign-in isn’t enabled yet. Use a magic link, or ask an admin to configure ${oauthProviderLabel(provider)} SSO.`,
+      };
+    }
+
     return { error: mapAuthServiceError(error.message) };
   }
 
@@ -67,7 +98,18 @@ export async function signInWithGoogle(redirectTo = "/dashboard") {
     redirect(data.url);
   }
 
-  return { error: "Could not start Google sign-in." };
+  return {
+    error: `Could not start ${oauthProviderLabel(provider)} sign-in.`,
+  };
+}
+
+/** @deprecated Prefer signInWithOAuthProvider("google") */
+export async function signInWithGoogle(redirectTo = "/dashboard") {
+  return signInWithOAuthProvider("google", redirectTo);
+}
+
+export async function signInWithApple(redirectTo = "/dashboard") {
+  return signInWithOAuthProvider("apple", redirectTo);
 }
 
 export async function signOut() {

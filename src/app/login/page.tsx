@@ -3,8 +3,8 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { LoginForm } from "@/components/auth/login-form";
 
 const AUTH_ERRORS: Record<string, string> = {
-  auth: "Sign-in failed. The link may have expired — request a new magic link.",
-  missing_code: "Invalid sign-in link. Please request a new magic link.",
+  auth: "Sign-in failed. The link may have expired — try again with SSO or a new magic link.",
+  missing_code: "Invalid sign-in link. Please try again with SSO or request a new magic link.",
 };
 
 export default async function LoginPage({
@@ -34,7 +34,7 @@ export default async function LoginPage({
             <div className="mb-6 text-center">
               <h1 className="text-2xl font-bold">Welcome back</h1>
               <p className="mt-2 text-sm text-brand-muted">
-                Sign in with a magic link — no password needed.
+                Sign in with Google, Apple, or a magic link — no password needed.
               </p>
             </div>
 
