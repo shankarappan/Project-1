@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient, getAuthUser } from "@/lib/supabase/cached";
 import { mapAuthServiceError, validateEmail } from "@/lib/auth/email";
+import { ensureProfile } from "@/lib/ensure-profile";
 import { logger } from "@/lib/logging/logger";
 
 export async function signInWithMagicLink(formData: FormData) {
@@ -83,22 +84,29 @@ export async function getCurrentProfile() {
   const user = await getAuthUser();
   if (!user) return null;
 
+  await ensureProfile(user);
   const supabase = await createClient();
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("profiles")
     .select("*")
     .eq("id", user.id)
-    .single();
+    .maybeSingle();
+
+  if (error) {
+    logger.warn("get_profile_failed", { code: error.code ?? "unknown" });
+    return null;
+  }
 
   return data;
 }
 
-export async function updateProfile(formData: FormData): Promise<void> {
+export async function updateProfile(formData: FormData) {
   const user = await getAuthUser();
   if (!user) {
-    throw new Error("Not authenticated.");
+    return { error: "Not authenticated. Please sign in again." };
   }
 
+  await ensureProfile(user);
   const fullName = String(formData.get("full_name") ?? "").trim();
   const supabase = await createClient();
 
@@ -108,32 +116,140 @@ export async function updateProfile(formData: FormData): Promise<void> {
     .eq("id", user.id);
 
   if (error) {
-    throw new Error(error.message);
+    logger.warn("update_profile_failed", { code: error.code ?? "unknown" });
+    return { error: "Could not save your profile. Please try again." };
   }
 
   revalidatePath("/settings");
   revalidatePath("/dashboard");
+  return { success: true, message: "Profile saved." };
+}
+
+async function seedDemoViaInserts(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string
+) {
+  const { data: group, error: groupError } = await supabase
+    .from("groups")
+    .insert({ name: "Demo Flatmates", created_by: userId })
+    .select("id")
+    .single();
+
+  if (groupError || !group) {
+    return { error: groupError?.message ?? "Failed to create demo group." };
+  }
+
+  const { error: memberError } = await supabase.from("group_members").insert({
+    group_id: group.id,
+    user_id: userId,
+    role: "admin",
+  });
+
+  if (memberError) {
+    await supabase.from("groups").delete().eq("id", group.id);
+    return { error: memberError.message };
+  }
+
+  const today = new Date().toISOString().split("T")[0];
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .split("T")[0];
+
+  const expenses = [
+    {
+      title: "Weekly groceries",
+      description: "Countdown run",
+      amount: 85.5,
+      date: today,
+    },
+    {
+      title: "Power bill",
+      description: null as string | null,
+      amount: 142,
+      date: weekAgo,
+    },
+  ];
+
+  for (const item of expenses) {
+    const { data: expense, error: expenseError } = await supabase
+      .from("expenses")
+      .insert({
+        group_id: group.id,
+        paid_by: userId,
+        created_by: userId,
+        title: item.title,
+        description: item.description,
+        amount: item.amount,
+        split_type: "equal",
+        expense_date: item.date,
+      })
+      .select("id")
+      .single();
+
+    if (expenseError || !expense) {
+      return {
+        error: expenseError?.message ?? "Failed to create demo expense.",
+      };
+    }
+
+    const { error: partError } = await supabase
+      .from("expense_participants")
+      .insert({
+        expense_id: expense.id,
+        user_id: userId,
+        share_amount: item.amount,
+        share_percentage: 100,
+      });
+
+    if (partError) {
+      return { error: partError.message };
+    }
+  }
+
+  return { success: true as const };
 }
 
 export async function seedDemoData() {
   const user = await getAuthUser();
   if (!user) {
-    return { error: "Not authenticated." };
+    return { error: "Not authenticated. Please sign in again." };
   }
 
+  await ensureProfile(user);
   const supabase = await createClient();
+
   const { error } = await supabase.rpc("seed_demo_for_user", {
     target_user: user.id,
   });
 
   if (error) {
-    return { error: error.message };
+    // Production may not have the SQL function yet — fall back to inserts.
+    const missingFn =
+      error.code === "PGRST202" ||
+      /could not find the function|schema cache/i.test(error.message);
+
+    if (!missingFn) {
+      logger.warn("seed_demo_rpc_failed", { code: error.code ?? "unknown" });
+      return {
+        error: "Could not load demo data. Please try again.",
+      };
+    }
+
+    logger.warn("seed_demo_rpc_missing_fallback", {
+      code: error.code ?? "unknown",
+    });
+    const fallback = await seedDemoViaInserts(supabase, user.id);
+    if (fallback.error) {
+      return { error: fallback.error };
+    }
   }
 
   revalidatePath("/dashboard");
+  revalidatePath("/settings");
+  revalidatePath("/groups");
   return { success: true, message: "Demo data created." };
 }
 
 export async function seedDemoDataAction() {
-  await seedDemoData();
+  return seedDemoData();
 }
