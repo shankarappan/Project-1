@@ -41,6 +41,7 @@ export function SettingsForms({ email, fullName }: SettingsFormsProps) {
         return;
       }
       setProfileMessage(result?.message ?? "Profile saved.");
+      router.refresh();
     } catch {
       setProfileError("Could not save your profile. Please try again.");
     } finally {
@@ -62,6 +63,7 @@ export function SettingsForms({ email, fullName }: SettingsFormsProps) {
         return;
       }
       setDemoMessage(result?.message ?? "Demo data created.");
+      router.refresh();
     } catch {
       setDemoError("Could not load demo data. Please try again.");
     } finally {
