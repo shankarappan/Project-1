@@ -24,7 +24,11 @@ export function AppShell({
   return (
     <div className="min-h-screen bg-surface">
       <AppNav profile={profile} />
-      <main className={cn("mx-auto px-4 py-8 sm:px-6", widths[maxWidth])}>
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className={cn("mx-auto px-4 py-8 sm:px-6 outline-none", widths[maxWidth])}
+      >
         {children}
       </main>
     </div>

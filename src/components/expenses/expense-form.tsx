@@ -31,16 +31,25 @@ export function ExpenseForm({ groupId, members }: ExpenseFormProps) {
   }
 
   async function handleSubmit(formData: FormData) {
+    if (loading) return;
     setLoading(true);
     selectedMembers.forEach((id) => formData.append("participant_ids", id));
     formData.set("split_type", splitType);
     formData.set("paid_by", paidBy);
+    formData.set(
+      "client_request_id",
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`
+    );
 
-    const result = await createExpense(groupId, formData);
-    setLoading(false);
-
-    if (result?.error) {
-      toast.error(result.error);
+    try {
+      const result = await createExpense(groupId, formData);
+      if (result?.error) {
+        toast.error(result.error);
+      }
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -176,7 +185,12 @@ export function ExpenseForm({ groupId, members }: ExpenseFormProps) {
 
       <input type="hidden" name="currency" value="NZD" />
 
-      <Button type="submit" disabled={loading || selectedMembers.length === 0} className="w-full">
+      <Button
+        type="submit"
+        disabled={loading || selectedMembers.length === 0}
+        aria-busy={loading}
+        className="min-h-11 w-full"
+      >
         {loading ? "Saving..." : "Add expense"}
       </Button>
     </form>

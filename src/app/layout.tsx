@@ -1,4 +1,5 @@
 import { Toaster } from "@/components/ui/sonner";
+import { SkipLink } from "@/components/a11y/skip-link";
 import type { Metadata, Viewport } from "next";
 import { Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
@@ -68,6 +69,7 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${jakarta.variable} h-full`}>
       <body className="min-h-full flex flex-col font-sans">
+        <SkipLink />
         {children}
         <Toaster richColors position="top-center" />
       </body>

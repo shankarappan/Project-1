@@ -40,6 +40,11 @@ export function getInitials(name: string | null | undefined, email?: string): st
   return (email?.[0] ?? "?").toUpperCase();
 }
 
+/** Round a dollar amount to 2dp via integer cents (half-up). */
 export function roundMoney(amount: number): number {
   return Math.round(amount * 100) / 100;
+}
+
+export function formatCents(cents: number, currency = "NZD"): string {
+  return formatCurrency(cents / 100, currency);
 }

@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient, getAuthUser } from "@/lib/supabase/cached";
 import { ensureProfile } from "@/lib/ensure-profile";
+import { requireGroupAdmin, requireGroupMember } from "@/lib/auth/membership";
+import { logger } from "@/lib/logging/logger";
 import { randomBytes } from "crypto";
 
 export async function createGroup(formData: FormData): Promise<void> {
@@ -67,7 +69,12 @@ export async function getUserGroups() {
 }
 
 export async function getGroup(groupId: string) {
+  const user = await getAuthUser();
+  if (!user) return null;
+
   const supabase = await createClient();
+  const membership = await requireGroupMember(supabase, groupId, user.id);
+  if (!membership.ok) return null;
 
   const { data: group, error } = await supabase
     .from("groups")
@@ -97,6 +104,10 @@ export async function createInvite(groupId: string, email?: string) {
   }
 
   const supabase = await createClient();
+  const admin = await requireGroupAdmin(supabase, groupId, user.id);
+  if (!admin.ok) {
+    return { error: admin.error };
+  }
 
   const inviteToken = randomBytes(24).toString("hex");
   const expiresAt = new Date();
@@ -115,6 +126,10 @@ export async function createInvite(groupId: string, email?: string) {
     .single();
 
   if (error || !data) {
+    logger.warn("create_invite_failed", {
+      code: error?.code ?? "unknown",
+      groupId,
+    });
     return { error: error?.message ?? "Failed to create invite." };
   }
 

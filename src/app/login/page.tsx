@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { LogoLockup } from "@/components/brand/logo-lockup";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { LoginForm } from "@/components/auth/login-form";
@@ -21,7 +20,11 @@ export default async function LoginPage({
 
   return (
     <div className="flex min-h-screen flex-col bg-hero-gradient">
-      <div className="flex flex-1 items-center justify-center px-4 py-12">
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="flex flex-1 items-center justify-center px-4 py-12 outline-none"
+      >
         <div className="w-full max-w-md">
           <div className="mb-8 flex justify-center">
             <LogoLockup href="/" showTagline />
@@ -48,7 +51,7 @@ export default async function LoginPage({
             By signing in you agree to fair splits and fewer awkward money chats.
           </p>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

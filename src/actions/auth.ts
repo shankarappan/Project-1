@@ -3,30 +3,47 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient, getAuthUser } from "@/lib/supabase/cached";
+import { mapAuthServiceError, validateEmail } from "@/lib/auth/email";
+import { logger } from "@/lib/logging/logger";
 
 export async function signInWithMagicLink(formData: FormData) {
-  const email = String(formData.get("email") ?? "").trim();
   const redirectTo = String(formData.get("redirect") ?? "/dashboard");
+  const validation = validateEmail(String(formData.get("email") ?? ""));
 
-  if (!email) {
-    return { error: "Email is required." };
+  if (validation.code !== "ok") {
+    return { error: validation.message ?? "Enter a valid email address." };
   }
 
-  const supabase = await createClient();
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  try {
+    const supabase = await createClient();
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
 
-  const { error } = await supabase.auth.signInWithOtp({
-    email,
-    options: {
-      emailRedirectTo: `${appUrl}/auth/callback?redirect=${encodeURIComponent(redirectTo)}`,
-    },
-  });
+    const { error } = await supabase.auth.signInWithOtp({
+      email: validation.email,
+      options: {
+        emailRedirectTo: `${appUrl}/auth/callback?redirect=${encodeURIComponent(redirectTo)}`,
+      },
+    });
 
-  if (error) {
-    return { error: error.message };
+    if (error) {
+      logger.warn("magic_link_failed", {
+        code: error.status ?? "unknown",
+        name: error.name,
+      });
+      return { error: mapAuthServiceError(error.message) };
+    }
+
+    return {
+      success: true,
+      message: "Check your email for a magic link to sign in.",
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "network";
+    logger.error("magic_link_exception", { reason: message.slice(0, 80) });
+    return {
+      error: mapAuthServiceError(message),
+    };
   }
-
-  return { success: true, message: "Check your email for a magic link to sign in." };
 }
 
 export async function signInWithGoogle(redirectTo = "/dashboard") {
@@ -41,7 +58,8 @@ export async function signInWithGoogle(redirectTo = "/dashboard") {
   });
 
   if (error) {
-    return { error: error.message };
+    logger.warn("google_oauth_failed", { name: error.name });
+    return { error: mapAuthServiceError(error.message) };
   }
 
   if (data.url) {

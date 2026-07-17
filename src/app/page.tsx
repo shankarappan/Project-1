@@ -11,12 +11,15 @@ export default function LandingPage() {
     <div className="min-h-screen bg-hero-gradient">
       <header className="mx-auto flex max-w-6xl items-center justify-between px-4 py-5 sm:px-6">
         <LogoLockup href="/" showTagline />
-        <Button asChild className="shadow-sm">
+        <Button
+          asChild
+          className="relative min-h-11 min-w-11 shadow-sm after:absolute after:inset-[-6px] after:content-['']"
+        >
           <Link href="/login">Sign in</Link>
         </Button>
       </header>
 
-      <main>
+      <main id="main-content" tabIndex={-1} className="outline-none">
         <section className="mx-auto max-w-6xl px-4 pb-20 pt-12 sm:px-6 sm:pt-20">
           <div className="mx-auto max-w-3xl text-center">
             <div className="mb-8 flex justify-center">
@@ -90,7 +93,11 @@ export default function LandingPage() {
             <p className="mt-2 text-brand-muted">
               Sign in with a magic link — no password required.
             </p>
-            <Button size="lg" asChild className="mt-6">
+            <Button
+              size="lg"
+              asChild
+              className="relative mt-6 min-h-11 min-w-11 after:absolute after:inset-[-6px] after:content-['']"
+            >
               <Link href="/login">Start now</Link>
             </Button>
           </div>
