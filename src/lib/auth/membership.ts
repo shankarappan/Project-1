@@ -23,6 +23,22 @@ export async function requireGroupMember(
   return { ok: true, role: data.role };
 }
 
+/**
+ * Pure authorization check for owner/admin actions (invites, etc.).
+ * Enforced server-side — hiding UI is not sufficient.
+ */
+export function canPerformOwnerAction(options: {
+  role: string | null | undefined;
+  userId: string;
+  groupCreatedBy: string | null | undefined;
+}): boolean {
+  if (options.role === "admin") return true;
+  if (options.groupCreatedBy && options.groupCreatedBy === options.userId) {
+    return true;
+  }
+  return false;
+}
+
 export async function requireGroupAdmin(
   supabase: SupabaseClient,
   groupId: string,
@@ -31,17 +47,19 @@ export async function requireGroupAdmin(
   const membership = await requireGroupMember(supabase, groupId, userId);
   if (!membership.ok) return membership;
 
-  if (membership.role === "admin") {
-    return { ok: true };
-  }
-
   const { data: group } = await supabase
     .from("groups")
     .select("created_by")
     .eq("id", groupId)
     .maybeSingle();
 
-  if (group?.created_by === userId) {
+  if (
+    canPerformOwnerAction({
+      role: membership.role,
+      userId,
+      groupCreatedBy: group?.created_by,
+    })
+  ) {
     return { ok: true };
   }
 

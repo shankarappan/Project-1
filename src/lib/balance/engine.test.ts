@@ -181,6 +181,41 @@ describe("settlements", () => {
     expect(maxSettlementCentsForPayer(ledger, "a")).toBe(0);
   });
 
+  it("reverses settlement effect on void (ignored in ledger)", () => {
+    const expenses: Expense[] = [
+      expense({
+        id: "e1",
+        paid_by: "a",
+        amount: 40,
+        expense_participants: [
+          { id: "p1", expense_id: "e1", user_id: "a", share_amount: 20, share_percentage: null },
+          { id: "p2", expense_id: "e1", user_id: "b", share_amount: 20, share_percentage: null },
+        ],
+      }),
+    ];
+    const settlements: Settlement[] = [
+      {
+        id: "s1",
+        group_id: "g1",
+        payer_id: "b",
+        receiver_id: "a",
+        amount: 20,
+        currency: "NZD",
+        note: null,
+        settled_at: "",
+        created_by: "b",
+        status: "voided",
+        voided_at: "2026-07-17",
+        voided_by: "b",
+        void_reason: "Voided by member",
+      },
+    ];
+
+    const withVoided = buildBalanceLedgerCents(expenses, settlements);
+    expect(withVoided.get("a")).toBe(2000);
+    expect(withVoided.get("b")).toBe(-2000);
+  });
+
   it("reverses settlement effect on delete", () => {
     const expenses: Expense[] = [
       expense({

@@ -132,6 +132,7 @@ function buildLedger(expenses, settlements) {
     }
   }
   for (const s of settlements) {
+    if (s.status === "voided") continue;
     adj(s.payer_id, dollarsToCents(s.amount));
     adj(s.receiver_id, -dollarsToCents(s.amount));
   }
@@ -139,15 +140,27 @@ function buildLedger(expenses, settlements) {
 }
 
 async function testUnitMathInline() {
-  // Mirror equal split cents rule used by the app
+  // Mirror equal split cents rule: sort IDs, floor, distribute remainder round-robin
   const total = 10000;
+  const ids = ["c", "a", "b"].sort((a, b) => a.localeCompare(b));
   const base = Math.floor(total / 3);
-  const shares = [base, base, total - base * 2];
-  if (shares[0] !== 3333 || shares[2] !== 3334 || shares.reduce((a, b) => a + b, 0) !== 10000) {
-    fail("Equal split math", shares.join(","));
+  let rem = total - base * 3;
+  const shares = {};
+  for (const id of ids) {
+    const extra = rem > 0 ? 1 : 0;
+    if (rem > 0) rem -= 1;
+    shares[id] = base + extra;
+  }
+  if (shares.a !== 3334 || shares.b !== 3333 || shares.c !== 3333) {
+    fail("equal split math", JSON.stringify(shares));
     return;
   }
-  ok("Equal split of $100 / 3 is deterministic and totals $100");
+  const sum = shares.a + shares.b + shares.c;
+  if (sum !== 10000) {
+    fail("equal split total", String(sum));
+    return;
+  }
+  ok("Equal split of $100 / 3 is deterministic by sorted ID and totals $100");
 }
 
 async function testSignInRedirectHttp() {
@@ -328,7 +341,6 @@ async function testInvite(clientA, clientB, clientOut) {
 async function testOwnerOnlyInvite(clientB) {
   // Ordinary member should not create invites via app action rule;
   // DB RLS still allows member insert — server action enforces admin.
-  // Verify member role is not admin:
   const { data: membership } = await clientB
     .from("group_members")
     .select("role")
@@ -337,6 +349,24 @@ async function testOwnerOnlyInvite(clientB) {
     .single();
   if (membership?.role === "member") ok("Ordinary member role is member (owner-only gated in actions)");
   else fail("Member role", membership?.role ?? "none");
+
+  // Direct test of the same pure gate used by createInvite / requireGroupAdmin
+  const { canPerformOwnerAction } = await import("../src/lib/auth/membership.ts");
+  const allowed = canPerformOwnerAction({
+    role: membership?.role,
+    userId: users.b.id,
+    groupCreatedBy: users.a.id,
+  });
+  if (!allowed) ok("Server-side invite gate rejects ordinary member");
+  else fail("Server-side invite gate", "member was allowed");
+
+  const adminAllowed = canPerformOwnerAction({
+    role: "admin",
+    userId: users.a.id,
+    groupCreatedBy: users.a.id,
+  });
+  if (adminAllowed) ok("Server-side invite gate allows admin/creator");
+  else fail("Server-side invite gate", "admin was denied");
 }
 
 async function insertExpense(client, payload, participants) {
@@ -591,20 +621,35 @@ async function testSettlementMutations(client, settlementId, payerId, receiverId
   }
 
   const before = await fetchLedger(client);
-  const { error: delErr } = await client.from("settlements").delete().eq("id", settlementId);
-  if (delErr && /policy|permission|42501/i.test(delErr.message)) {
-    console.log("  · Settlement delete policy not applied yet");
-    // cleanup via admin
-    await admin.from("settlements").delete().eq("id", settlementId);
-    ok("Delete settlement (admin fallback)");
-  } else if (delErr) {
-    fail("Delete settlement", delErr.message);
+  // Prefer soft-void when status column exists
+  const { error: voidErr } = await client
+    .from("settlements")
+    .update({
+      status: "voided",
+      voided_at: new Date().toISOString(),
+      void_reason: "E2E void",
+    })
+    .eq("id", settlementId);
+
+  if (voidErr && /status|column|voided/i.test(voidErr.message)) {
+    const { error: delErr } = await client.from("settlements").delete().eq("id", settlementId);
+    if (delErr && /policy|permission|42501/i.test(delErr.message)) {
+      console.log("  · Settlement delete policy not applied yet");
+      await admin.from("settlements").delete().eq("id", settlementId);
+      ok("Delete settlement (admin fallback)");
+    } else if (delErr) {
+      fail("Delete settlement", delErr.message);
+    } else {
+      ok("Delete settlement completed (pre-void-schema fallback)");
+    }
+  } else if (voidErr) {
+    fail("Void settlement", voidErr.message);
   } else {
     const after = await fetchLedger(client);
     const beforeP = before.get(payerId) ?? 0;
     const afterP = after.get(payerId) ?? 0;
-    if (beforeP !== afterP) ok("Delete settlement updates balances");
-    else ok("Delete settlement completed");
+    if (beforeP !== afterP) ok("Void settlement updates balances");
+    else ok("Void settlement completed");
   }
   void receiverId;
 }
@@ -755,6 +800,7 @@ async function main() {
   try {
     await applyMigration("002_fix_group_rls.sql");
     await applyMigration("003_finance_safety.sql");
+    await applyMigration("004_settlement_void.sql");
     await testUnitMathInline();
     await testSignInRedirectHttp();
     await testSecurityHeaders();

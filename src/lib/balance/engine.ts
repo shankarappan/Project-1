@@ -39,6 +39,7 @@ export function buildBalanceLedgerCents(
   }
 
   for (const settlement of settlements) {
+    if (settlement.status === "voided") continue;
     adjust(settlement.payer_id, dollarsToCents(Number(settlement.amount)));
     adjust(settlement.receiver_id, -dollarsToCents(Number(settlement.amount)));
   }

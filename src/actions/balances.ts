@@ -159,18 +159,23 @@ export async function createSettlement(groupId: string, formData: FormData) {
     supabase.from("settlements").select("*").eq("group_id", groupId),
   ]);
 
+  const activeSettlements = ((settlements as Settlement[]) ?? []).filter(
+    (s) => s.status !== "voided"
+  );
+
   const ledgerCents = buildBalanceLedgerCents(
     (expenses as Expense[]) ?? [],
-    (settlements as Settlement[]) ?? []
+    activeSettlements
   );
   const maxCents = maxSettlementCentsForPayer(ledgerCents, payerId);
 
   if (amountCents > maxCents) {
+    const owed = centsToDollars(maxCents).toFixed(2);
     return {
       error:
         maxCents === 0
-          ? "This payer does not currently owe the group, so a settlement cannot be recorded."
-          : `Settlement cannot exceed what the payer currently owes (${centsToDollars(maxCents).toFixed(2)}).`,
+          ? "You only owe $0.00 in this group."
+          : `You only owe $${owed} in this group.`,
     };
   }
 
@@ -199,6 +204,7 @@ export async function createSettlement(groupId: string, formData: FormData) {
     currency,
     note,
     created_by: user.id,
+    status: "active" as const,
   };
 
   let { error } = await supabase.from("settlements").insert({
@@ -206,9 +212,19 @@ export async function createSettlement(groupId: string, formData: FormData) {
     ...(clientRequestId ? { client_request_id: clientRequestId } : {}),
   });
 
-  // Remote DB may not have migration 003 yet
-  if (error && clientRequestId && /client_request_id|column/i.test(error.message)) {
-    ({ error } = await supabase.from("settlements").insert(baseRow));
+  // Remote DB may not have migration 003/004 yet
+  if (error && /client_request_id|status|column/i.test(error.message)) {
+    const legacyRow = {
+      group_id: groupId,
+      payer_id: payerId,
+      receiver_id: receiverId,
+      amount,
+      currency,
+      note,
+      created_by: user.id,
+    };
+    const retry = await supabase.from("settlements").insert(legacyRow);
+    error = retry.error;
   }
 
   if (error) {
@@ -228,6 +244,10 @@ export async function createSettlement(groupId: string, formData: FormData) {
   return { success: true };
 }
 
+/**
+ * MVP edits are void + recreate. Direct field updates remain available for
+ * internal/tests but UI uses voidSettlement.
+ */
 export async function updateSettlement(
   settlementId: string,
   groupId: string,
@@ -284,15 +304,23 @@ export async function updateSettlement(
       .neq("id", settlementId),
   ]);
 
+  const activeSettlements = ((settlements as Settlement[]) ?? []).filter(
+    (s) => s.status !== "voided"
+  );
+
   const ledgerCents = buildBalanceLedgerCents(
     (expenses as Expense[]) ?? [],
-    (settlements as Settlement[]) ?? []
+    activeSettlements
   );
   const maxCents = maxSettlementCentsForPayer(ledgerCents, payerId);
 
   if (amountCents > maxCents) {
+    const owed = centsToDollars(maxCents).toFixed(2);
     return {
-      error: `Settlement cannot exceed what the payer currently owes (${centsToDollars(maxCents).toFixed(2)}).`,
+      error:
+        maxCents === 0
+          ? "You only owe $0.00 in this group."
+          : `You only owe $${owed} in this group.`,
     };
   }
 
@@ -317,7 +345,12 @@ export async function updateSettlement(
   return { success: true };
 }
 
-export async function deleteSettlement(settlementId: string, groupId: string) {
+/** Soft-void a settlement; preserves the row for audit history. */
+export async function voidSettlement(
+  settlementId: string,
+  groupId: string,
+  reason?: string
+) {
   const user = await getAuthUser();
   if (!user) {
     return { error: "Not authenticated." };
@@ -329,13 +362,39 @@ export async function deleteSettlement(settlementId: string, groupId: string) {
     return { error: membership.error };
   }
 
-  const { error } = await supabase
+  const voidPayload = {
+    status: "voided" as const,
+    voided_at: new Date().toISOString(),
+    voided_by: user.id,
+    void_reason: reason?.trim() || "Voided by member",
+  };
+
+  let { error } = await supabase
     .from("settlements")
-    .delete()
+    .update(voidPayload)
     .eq("id", settlementId)
-    .eq("group_id", groupId);
+    .eq("group_id", groupId)
+    .neq("status", "voided");
+
+  // Fallback when status column is not migrated yet: hard-delete as last resort
+  // with an audit log note (should only happen pre-migration-004).
+  if (error && /status|column|voided/i.test(error.message)) {
+    logger.warn("void_settlement_fallback_delete", {
+      groupId,
+      reason: "status_column_missing",
+    });
+    ({ error } = await supabase
+      .from("settlements")
+      .delete()
+      .eq("id", settlementId)
+      .eq("group_id", groupId));
+  }
 
   if (error) {
+    logger.error("void_settlement_failed", {
+      code: error.code ?? "unknown",
+      groupId,
+    });
     return { error: error.message };
   }
 
@@ -343,6 +402,11 @@ export async function deleteSettlement(settlementId: string, groupId: string) {
   revalidatePath(`/groups/${groupId}/settlements`);
   revalidatePath("/dashboard");
   return { success: true };
+}
+
+/** @deprecated Prefer voidSettlement — hard delete is not used by the UI. */
+export async function deleteSettlement(settlementId: string, groupId: string) {
+  return voidSettlement(settlementId, groupId, "Deleted (legacy path)");
 }
 
 export async function getGroupSettlements(groupId: string) {

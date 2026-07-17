@@ -18,13 +18,18 @@ import { toast } from "sonner";
 
 interface InviteDialogProps {
   groupId: string;
+  canInvite: boolean;
 }
 
-export function InviteDialog({ groupId }: InviteDialogProps) {
+export function InviteDialog({ groupId, canInvite }: InviteDialogProps) {
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  if (!canInvite) {
+    return null;
+  }
 
   async function handleCreateInvite() {
     setLoading(true);

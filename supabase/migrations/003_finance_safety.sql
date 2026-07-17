@@ -1,4 +1,22 @@
 -- Financial safety: idempotency keys, settlement mutations, atomic expense RPCs
+--
+-- EXPAND-ONLY / BACKWARD COMPATIBLE
+-- - Adds nullable client_request_id columns (no drops/renames).
+-- - Adds unique indexes (partial, only when client_request_id is set).
+-- - Adds update/delete RLS policies for settlements.
+-- - Creates/replaces SECURITY DEFINER RPCs (additive).
+-- Currently deployed app code that ignores these columns/RPCs remains compatible.
+--
+-- ROLLOUT (do NOT bundle unverified into an app deploy):
+-- 1. Review for destructive ops (none intended here).
+-- 2. Backup/snapshot production.
+-- 3. Apply + verify on staging; confirm live app still works against migrated schema.
+-- 4. Apply to production; verify schema and critical queries.
+-- 5. Then deploy application code that depends on these objects.
+-- 6. Post-deploy smoke tests.
+--
+-- If a future change must remove/rename columns, use expand → migrate → contract
+-- across separate releases — never a one-shot destructive cutover.
 
 -- Idempotency for duplicate form submissions
 alter table public.expenses

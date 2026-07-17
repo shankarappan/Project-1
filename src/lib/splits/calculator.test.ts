@@ -7,11 +7,27 @@ import {
 import { sumCents } from "@/lib/money/cents";
 
 describe("equal split", () => {
-  it("splits $100 among 3 people deterministically with remainder on last", () => {
-    const results = calculateEqualSplitForTest(10000, ["a", "b", "c"]);
-    expect(results.map((r) => r.shareAmountCents)).toEqual([3333, 3333, 3334]);
+  it("splits $100 among 3 people by sorted ID with round-robin remainder", () => {
+    // Sorted IDs a,b,c → remainder 1 cent goes to a first
+    const results = calculateEqualSplitForTest(10000, ["c", "a", "b"]);
+    const byId = Object.fromEntries(
+      results.map((r) => [r.userId, r.shareAmountCents])
+    );
+    expect(byId).toEqual({ a: 3334, b: 3333, c: 3333 });
     expect(sumCents(results.map((r) => r.shareAmountCents))).toBe(10000);
-    expect(results.map((r) => r.shareAmount)).toEqual([33.33, 33.33, 33.34]);
+  });
+
+  it("does not change shares when UI order changes", () => {
+    const order1 = calculateEqualSplitForTest(10000, ["a", "b", "c"]);
+    const order2 = calculateEqualSplitForTest(10000, ["c", "b", "a"]);
+    const map1 = Object.fromEntries(
+      order1.map((r) => [r.userId, r.shareAmountCents])
+    );
+    const map2 = Object.fromEntries(
+      order2.map((r) => [r.userId, r.shareAmountCents])
+    );
+    expect(map1).toEqual(map2);
+    expect(sumCents(order1.map((r) => r.shareAmountCents))).toBe(10000);
   });
 
   it("assigns remainder consistently on repeated calls", () => {

@@ -1,51 +1,51 @@
 /**
  * Documented financial business rules for Lets Split.
- *
- * Ambiguous rules that need a product decision are marked NEEDS_DECISION.
- * Implemented defaults below preserve prior app behavior where possible.
  */
 
 export const MONEY_BUSINESS_RULES = {
   /**
-   * Equal split: each share is floor(total/n) cents; the remainder
-   * (total - floor*n) is assigned to the LAST participant in the submitted order.
-   * Preserves existing calculator behavior.
+   * Equal split: floor(total/n) cents each, then distribute remaining cents
+   * one-at-a-time through participant IDs sorted lexicographically.
+   * Independent of UI / form order.
    */
-  equalRemainderAssignee: "last_participant" as const,
+  equalRemainderAssignee: "sorted_participant_id_round_robin" as const,
 
   /**
    * Exact split: every selected participant must provide a non-blank, non-negative
    * amount; shares must sum exactly to the expense total in cents.
-   * Blank is rejected (not treated as zero) so silent under-allocation cannot happen.
+   * Blank is rejected (not treated as zero). Deliberate $0 must be entered as 0,
+   * or the participant should be deselected.
    */
   exactBlankAmount: "reject" as const,
 
   /**
    * Percentage split: percentages must sum to exactly 100.00% (10000 centipercent).
-   * Monetary shares are computed in cents; remainder cents go to the last participant.
+   * Floor each share in cents, then distribute leftover cents by sorted participant ID.
    */
   percentageTotal: "exactly_100" as const,
 
   /**
-   * Settlement overpayment: reject when the settlement amount exceeds the payer's
-   * current net debt to the group (how much they owe overall).
-   *
-   * NEEDS_DECISION: pairwise caps (cannot pay one person more than they are owed)
-   * are not enforced because the ledger is net-based, not pairwise.
+   * Settlement overpayment: reject when amount exceeds the payer’s current net
+   * group debt. Message: "You only owe $X in this group."
+   * No pairwise caps (simplified balances can reshuffle pairings).
+   * Partial settlements allowed up to net debt. Zero/negative/duplicates rejected.
    */
   settlementOverpayment: "reject_vs_payer_net_debt" as const,
 
   /**
-   * Concurrent writes: expense create/update/delete and settlement writes that
-   * touch multiple rows use a Postgres function (single transaction).
+   * Settlements are voided (soft), not hard-deleted, preserving audit history.
+   * Edits are delete-and-recreate (void + new record) for MVP.
+   */
+  settlementLifecycle: "void_not_hard_delete" as const,
+
+  /**
+   * Concurrent writes: expense create/update use transactional RPCs where available.
    * Duplicate form posts use client_request_id uniqueness for idempotency.
-   * Concurrent independent inserts are safe because balances are derived from the ledger.
    */
   concurrency: "transactional_rpc_plus_idempotency" as const,
 
   /**
-   * Owner-only actions: create invites and update group settings require
-   * group role admin (creator is seeded as admin) or being groups.created_by.
+   * Invites: creator/admin only, enforced server-side.
    */
   ownerActions: "admin_or_creator" as const,
 } as const;

@@ -118,22 +118,28 @@ function calculateEqualSplitCents(
 ): InternalShare[] {
   const count = participants.length;
   const baseShare = Math.floor(totalCents / count);
-  let allocated = 0;
+  let remainder = totalCents - baseShare * count;
 
-  return participants.map((participant, index) => {
-    const isLast = index === count - 1;
-    const shareAmountCents = isLast ? totalCents - allocated : baseShare;
-    allocated += shareAmountCents;
+  // Deterministic by immutable participant ID (not UI / form order).
+  const sortedIds = [...participants]
+    .map((p) => p.userId)
+    .sort((a, b) => a.localeCompare(b));
 
-    // Display percentage: equal visual share; last may differ by <1 cent in money
-    const sharePercentage = Math.round((10000 / count)) / 100;
+  const amounts = new Map<string, number>();
+  for (const userId of sortedIds) {
+    const extra = remainder > 0 ? 1 : 0;
+    if (remainder > 0) remainder -= 1;
+    amounts.set(userId, baseShare + extra);
+  }
 
-    return {
-      userId: participant.userId,
-      shareAmountCents,
-      sharePercentage,
-    };
-  });
+  const sharePercentage = Math.round(10000 / count) / 100;
+
+  // Preserve caller order for display; amounts come from sorted distribution.
+  return participants.map((participant) => ({
+    userId: participant.userId,
+    shareAmountCents: amounts.get(participant.userId) ?? baseShare,
+    sharePercentage,
+  }));
 }
 
 function resolveExactCents(participant: SplitInput): number {
@@ -237,23 +243,33 @@ function calculatePercentageSplitCents(
     );
   }
 
+  const amounts = new Map<string, number>();
   let allocated = 0;
-  const count = parts.length;
 
-  return parts.map((part, index) => {
-    const isLast = index === count - 1;
-    const shareAmountCents = isLast
-      ? totalCents - allocated
-      : Math.floor((totalCents * part.percentageCentipercent) / CENTIPERCENT_TOTAL);
+  for (const part of parts) {
+    const share = Math.floor(
+      (totalCents * part.percentageCentipercent) / CENTIPERCENT_TOTAL
+    );
+    amounts.set(part.userId, share);
+    allocated += share;
+  }
 
-    allocated += shareAmountCents;
+  let remainder = totalCents - allocated;
+  const sortedIds = [...parts]
+    .map((p) => p.userId)
+    .sort((a, b) => a.localeCompare(b));
 
-    return {
-      userId: part.userId,
-      shareAmountCents,
-      sharePercentage: centipercentToDisplay(part.percentageCentipercent),
-    };
-  });
+  for (const userId of sortedIds) {
+    if (remainder <= 0) break;
+    amounts.set(userId, (amounts.get(userId) ?? 0) + 1);
+    remainder -= 1;
+  }
+
+  return parts.map((part) => ({
+    userId: part.userId,
+    shareAmountCents: amounts.get(part.userId) ?? 0,
+    sharePercentage: centipercentToDisplay(part.percentageCentipercent),
+  }));
 }
 
 /** @deprecated Prefer calculateSplits; kept for call-site clarity in tests. */
