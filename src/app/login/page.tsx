@@ -1,27 +1,40 @@
-import Link from "next/link";
 import { LogoLockup } from "@/components/brand/logo-lockup";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { LoginForm } from "@/components/auth/login-form";
+import { mapAuthServiceError } from "@/lib/auth/email";
+
+export const dynamic = "force-dynamic";
 
 const AUTH_ERRORS: Record<string, string> = {
-  auth: "Sign-in failed. The link may have expired — request a new magic link.",
-  missing_code: "Invalid sign-in link. Please request a new magic link.",
+  auth: "Sign-in failed. The link may have expired — try again with SSO or a new magic link.",
+  missing_code: "Invalid sign-in link. Please try again with SSO or request a new magic link.",
 };
 
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ redirect?: string; error?: string; message?: string }>;
+  searchParams: Promise<{
+    redirect?: string;
+    error?: string;
+    message?: string;
+    email?: string;
+  }>;
 }) {
   const params = await searchParams;
   const redirectTo = params.redirect ?? "/dashboard";
+  const inviteContext = redirectTo.startsWith("/invite/");
+  const rawMessage = params.message;
   const errorMessage =
-    params.message ??
+    (rawMessage ? mapAuthServiceError(rawMessage) : null) ??
     (params.error ? AUTH_ERRORS[params.error] ?? "Sign-in failed." : null);
 
   return (
     <div className="flex min-h-screen flex-col bg-hero-gradient">
-      <div className="flex flex-1 items-center justify-center px-4 py-12">
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="flex flex-1 items-center justify-center px-4 py-12 outline-none"
+      >
         <div className="w-full max-w-md">
           <div className="mb-8 flex justify-center">
             <LogoLockup href="/" showTagline />
@@ -29,9 +42,13 @@ export default async function LoginPage({
 
           <div className="rounded-2xl border border-border/80 bg-card p-8 shadow-card">
             <div className="mb-6 text-center">
-              <h1 className="text-2xl font-bold">Welcome back</h1>
+              <h1 className="text-2xl font-bold">
+                {inviteContext ? "Join your group" : "Welcome back"}
+              </h1>
               <p className="mt-2 text-sm text-brand-muted">
-                Sign in with a magic link — no password needed.
+                {inviteContext
+                  ? "Use email & password if magic-link email is rate-limited. Google/Apple also work once enabled."
+                  : "Sign in with Google, Apple, email & password, or a magic link."}
               </p>
             </div>
 
@@ -41,14 +58,18 @@ export default async function LoginPage({
               </Alert>
             )}
 
-            <LoginForm redirectTo={redirectTo} />
+            <LoginForm
+              redirectTo={redirectTo}
+              initialEmail={params.email ?? ""}
+              inviteContext={inviteContext}
+            />
           </div>
 
           <p className="mt-6 text-center text-xs text-brand-muted">
             By signing in you agree to fair splits and fewer awkward money chats.
           </p>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

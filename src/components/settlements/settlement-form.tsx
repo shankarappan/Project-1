@@ -20,20 +20,30 @@ export function SettlementForm({ groupId, members }: SettlementFormProps) {
   const [receiverId, setReceiverId] = useState(members[1]?.user_id ?? members[0]?.user_id ?? "");
 
   async function handleSubmit(formData: FormData) {
+    if (loading) return;
     setLoading(true);
     formData.set("payer_id", payerId);
     formData.set("receiver_id", receiverId);
+    formData.set(
+      "client_request_id",
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`
+    );
 
-    const result = await createSettlement(groupId, formData);
-    setLoading(false);
+    try {
+      const result = await createSettlement(groupId, formData);
 
-    if (result.error) {
-      toast.error(result.error);
-      return;
+      if (result.error) {
+        toast.error(result.error);
+        return;
+      }
+
+      toast.success("Settlement recorded");
+      (document.getElementById("settlement-form") as HTMLFormElement)?.reset();
+    } finally {
+      setLoading(false);
     }
-
-    toast.success("Settlement recorded");
-    (document.getElementById("settlement-form") as HTMLFormElement)?.reset();
   }
 
   const selectClassName =
@@ -102,7 +112,12 @@ export function SettlementForm({ groupId, members }: SettlementFormProps) {
 
       <input type="hidden" name="currency" value="NZD" />
 
-      <Button type="submit" disabled={loading || !payerId || !receiverId}>
+      <Button
+        type="submit"
+        disabled={loading || !payerId || !receiverId}
+        aria-busy={loading}
+        className="min-h-11"
+      >
         {loading ? "Recording..." : "Record settlement"}
       </Button>
     </form>

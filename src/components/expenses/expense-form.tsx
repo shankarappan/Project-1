@@ -20,6 +20,8 @@ export function ExpenseForm({ groupId, members }: ExpenseFormProps) {
   const [selectedMembers, setSelectedMembers] = useState<string[]>(
     members.map((m) => m.user_id)
   );
+  const [exactValues, setExactValues] = useState<Record<string, string>>({});
+  const [exactErrors, setExactErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
 
   function toggleMember(userId: string) {
@@ -28,24 +30,63 @@ export function ExpenseForm({ groupId, members }: ExpenseFormProps) {
         ? prev.filter((id) => id !== userId)
         : [...prev, userId]
     );
+    setExactErrors((prev) => {
+      const next = { ...prev };
+      delete next[userId];
+      return next;
+    });
   }
 
-  async function handleSubmit(formData: FormData) {
+  function validateExactAmounts(): boolean {
+    if (splitType !== "exact") {
+      setExactErrors({});
+      return true;
+    }
+
+    const errors: Record<string, string> = {};
+    for (const userId of selectedMembers) {
+      const raw = exactValues[userId];
+      if (raw == null || String(raw).trim() === "") {
+        errors[userId] =
+          "Enter an amount, or deselect this person. Blank is not treated as $0.";
+      }
+    }
+    setExactErrors(errors);
+    return Object.keys(errors).length === 0;
+  }
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (loading) return;
+
+    if (!validateExactAmounts()) {
+      return;
+    }
+
+    const formData = new FormData(event.currentTarget);
     setLoading(true);
     selectedMembers.forEach((id) => formData.append("participant_ids", id));
     formData.set("split_type", splitType);
     formData.set("paid_by", paidBy);
+    formData.set(
+      "client_request_id",
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`
+    );
 
-    const result = await createExpense(groupId, formData);
-    setLoading(false);
-
-    if (result?.error) {
-      toast.error(result.error);
+    try {
+      const result = await createExpense(groupId, formData);
+      if (result?.error) {
+        toast.error(result.error);
+      }
+    } finally {
+      setLoading(false);
     }
   }
 
   return (
-    <form action={handleSubmit} className="space-y-6">
+    <form onSubmit={handleSubmit} className="space-y-6" noValidate={splitType === "exact"}>
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2 sm:col-span-2">
           <Label htmlFor="title">Title</Label>
@@ -112,7 +153,10 @@ export function ExpenseForm({ groupId, members }: ExpenseFormProps) {
               type="button"
               variant={splitType === type ? "default" : "outline"}
               size="sm"
-              onClick={() => setSplitType(type)}
+              onClick={() => {
+                setSplitType(type);
+                setExactErrors({});
+              }}
             >
               {type}
             </Button>
@@ -127,56 +171,96 @@ export function ExpenseForm({ groupId, members }: ExpenseFormProps) {
             const name =
               member.profiles?.full_name ?? member.profiles?.email ?? "Member";
             const selected = selectedMembers.includes(member.user_id);
+            const exactError = exactErrors[member.user_id];
+            const exactErrorId = `exact-error-${member.user_id}`;
 
             return (
               <div
                 key={member.user_id}
-                className="flex flex-wrap items-center gap-3 rounded-md px-2 py-1.5 hover:bg-muted/50"
+                className="rounded-md px-2 py-1.5 hover:bg-muted/50"
               >
-                <label className="flex flex-1 cursor-pointer items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={selected}
-                    onChange={() => toggleMember(member.user_id)}
-                    className="rounded"
-                  />
-                  <span className="text-sm">{name}</span>
-                </label>
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="flex flex-1 cursor-pointer items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      onChange={() => toggleMember(member.user_id)}
+                      className="rounded"
+                    />
+                    <span className="text-sm">{name}</span>
+                  </label>
 
-                {selected && splitType === "exact" && (
-                  <Input
-                    name={`exact_${member.user_id}`}
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    placeholder="0.00"
-                    className="w-28"
-                    required
-                  />
-                )}
+                  {selected && splitType === "exact" && (
+                    <Input
+                      name={`exact_${member.user_id}`}
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      placeholder="Amount"
+                      className="w-28"
+                      value={exactValues[member.user_id] ?? ""}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setExactValues((prev) => ({
+                          ...prev,
+                          [member.user_id]: value,
+                        }));
+                        if (exactError) {
+                          setExactErrors((prev) => {
+                            const next = { ...prev };
+                            delete next[member.user_id];
+                            return next;
+                          });
+                        }
+                      }}
+                      aria-invalid={exactError ? true : undefined}
+                      aria-describedby={exactError ? exactErrorId : undefined}
+                    />
+                  )}
 
-                {selected && splitType === "percentage" && (
-                  <Input
-                    name={`pct_${member.user_id}`}
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    max="100"
-                    placeholder="%"
-                    className="w-24"
-                    defaultValue={splitType === "percentage" ? (100 / members.length).toFixed(2) : undefined}
-                    required
-                  />
+                  {selected && splitType === "percentage" && (
+                    <Input
+                      name={`pct_${member.user_id}`}
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      max="100"
+                      placeholder="%"
+                      className="w-24"
+                      defaultValue={(100 / Math.max(selectedMembers.length, 1)).toFixed(2)}
+                      required
+                    />
+                  )}
+                </div>
+                {selected && splitType === "exact" && exactError && (
+                  <p
+                    id={exactErrorId}
+                    role="alert"
+                    className="mt-1 text-xs text-destructive"
+                  >
+                    {exactError}
+                  </p>
                 )}
               </div>
             );
           })}
         </div>
+        {splitType === "exact" && (
+          <p className="text-xs text-brand-muted">
+            Enter $0 deliberately if someone owes nothing, or deselect them.
+            Blank amounts are rejected.
+          </p>
+        )}
       </div>
 
       <input type="hidden" name="currency" value="NZD" />
 
-      <Button type="submit" disabled={loading || selectedMembers.length === 0} className="w-full">
+      <Button
+        type="submit"
+        disabled={loading || selectedMembers.length === 0}
+        aria-busy={loading}
+        className="min-h-11 w-full"
+      >
         {loading ? "Saving..." : "Add expense"}
       </Button>
     </form>

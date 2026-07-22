@@ -25,7 +25,11 @@ export async function updateSession(request: NextRequest) {
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!supabaseUrl || !supabaseAnonKey) {
-    return NextResponse.next({ request });
+    return NextResponse.next({
+      request: {
+        headers: request.headers,
+      },
+    });
   }
 
   const needsAuth =
@@ -35,14 +39,26 @@ export async function updateSession(request: NextRequest) {
 
   // Skip expensive getUser() on cold public visits (landing with no session)
   if (!needsAuth && pathname === "/") {
-    return NextResponse.next({ request });
+    return NextResponse.next({
+      request: {
+        headers: request.headers,
+      },
+    });
   }
 
   if (!needsAuth && pathname.startsWith("/invite")) {
-    return NextResponse.next({ request });
+    return NextResponse.next({
+      request: {
+        headers: request.headers,
+      },
+    });
   }
 
-  let supabaseResponse = NextResponse.next({ request });
+  let supabaseResponse = NextResponse.next({
+    request: {
+      headers: request.headers,
+    },
+  });
 
   const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
     cookies: {
@@ -53,7 +69,11 @@ export async function updateSession(request: NextRequest) {
         cookiesToSet.forEach(({ name, value }) =>
           request.cookies.set(name, value)
         );
-        supabaseResponse = NextResponse.next({ request });
+        supabaseResponse = NextResponse.next({
+          request: {
+            headers: request.headers,
+          },
+        });
         cookiesToSet.forEach(({ name, value, options }) =>
           supabaseResponse.cookies.set(name, value, options)
         );

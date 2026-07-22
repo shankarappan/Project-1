@@ -60,6 +60,11 @@ export interface Settlement {
   note: string | null;
   settled_at: string;
   created_by: string;
+  /** active (default) or voided — voided rows are kept for audit and ignored in balances */
+  status?: "active" | "voided" | null;
+  voided_at?: string | null;
+  voided_by?: string | null;
+  void_reason?: string | null;
   payer?: Profile;
   receiver?: Profile;
 }

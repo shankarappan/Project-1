@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AppShell } from "@/components/layout/app-shell";
 import { SettlementForm } from "@/components/settlements/settlement-form";
+import { VoidSettlementButton } from "@/components/settlements/void-settlement-button";
 import { Button } from "@/components/ui/button";
 import { getCurrentProfile } from "@/actions/auth";
 import { getGroup } from "@/actions/groups";
@@ -25,6 +26,7 @@ export default async function SettlementsPage({
   if (!group) notFound();
 
   const members = (group.group_members as GroupMember[]) ?? [];
+  const rows = (settlements as Settlement[]) ?? [];
 
   return (
     <AppShell profile={profile} maxWidth="lg">
@@ -39,7 +41,9 @@ export default async function SettlementsPage({
         <section className="rounded-2xl border border-border/80 bg-card p-8 shadow-card">
           <h1 className="text-2xl font-bold">Record settlement</h1>
           <p className="mt-2 text-sm text-brand-muted">
-            Log a payment between group members.
+            Log a payment between group members. Amounts cannot exceed what the
+            payer currently owes in this group. To change a settlement, void it
+            and record a new one.
           </p>
           <div className="mt-8">
             <SettlementForm groupId={id} members={members} />
@@ -48,27 +52,58 @@ export default async function SettlementsPage({
 
         <section className="rounded-2xl border border-border/80 bg-card p-6 shadow-card">
           <h2 className="font-semibold">Settlement history</h2>
-          {(settlements as Settlement[]).length === 0 ? (
+          {rows.length === 0 ? (
             <p className="mt-4 text-sm text-brand-muted">
               No settlements recorded yet.
             </p>
           ) : (
             <ul className="mt-4 divide-y divide-border/60">
-              {(settlements as Settlement[]).map((s) => (
-                <li key={s.id} className="py-3 text-sm">
-                  <p className="font-medium text-brand-navy">
-                    {s.payer?.full_name ?? s.payer?.email} paid{" "}
-                    {s.receiver?.full_name ?? s.receiver?.email}{" "}
-                    <span className="text-brand-blue">
-                      {formatCurrency(Number(s.amount), s.currency)}
-                    </span>
-                  </p>
-                  <p className="text-xs text-brand-muted">
-                    {formatDate(s.settled_at)}
-                    {s.note ? ` · ${s.note}` : ""}
-                  </p>
-                </li>
-              ))}
+              {rows.map((s) => {
+                const voided = s.status === "voided";
+                const label = `${s.payer?.full_name ?? s.payer?.email} paid ${s.receiver?.full_name ?? s.receiver?.email} ${formatCurrency(Number(s.amount), s.currency)}`;
+                return (
+                  <li
+                    key={s.id}
+                    className="flex flex-col gap-2 py-3 text-sm sm:flex-row sm:items-start sm:justify-between"
+                  >
+                    <div>
+                      <p
+                        className={
+                          voided
+                            ? "font-medium text-brand-muted line-through"
+                            : "font-medium text-brand-navy"
+                        }
+                      >
+                        {s.payer?.full_name ?? s.payer?.email} paid{" "}
+                        {s.receiver?.full_name ?? s.receiver?.email}{" "}
+                        <span className={voided ? "" : "text-brand-blue"}>
+                          {formatCurrency(Number(s.amount), s.currency)}
+                        </span>
+                        {voided && (
+                          <span className="ml-2 text-xs font-semibold uppercase tracking-wide text-brand-muted no-underline">
+                            Voided
+                          </span>
+                        )}
+                      </p>
+                      <p className="text-xs text-brand-muted">
+                        {formatDate(s.settled_at)}
+                        {s.note ? ` · ${s.note}` : ""}
+                        {voided && s.voided_at
+                          ? ` · Voided ${formatDate(s.voided_at)}`
+                          : ""}
+                        {voided && s.void_reason ? ` · ${s.void_reason}` : ""}
+                      </p>
+                    </div>
+                    {!voided && (
+                      <VoidSettlementButton
+                        settlementId={s.id}
+                        groupId={id}
+                        label={label}
+                      />
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </section>

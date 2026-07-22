@@ -18,13 +18,18 @@ import { toast } from "sonner";
 
 interface InviteDialogProps {
   groupId: string;
+  canInvite: boolean;
 }
 
-export function InviteDialog({ groupId }: InviteDialogProps) {
+export function InviteDialog({ groupId, canInvite }: InviteDialogProps) {
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  if (!canInvite) {
+    return null;
+  }
 
   async function handleCreateInvite() {
     setLoading(true);
@@ -60,8 +65,10 @@ export function InviteDialog({ groupId }: InviteDialogProps) {
         <DialogHeader>
           <DialogTitle>Invite members</DialogTitle>
           <DialogDescription>
-            Share a link or optionally note an email for your records. Anyone with
-            the link can join after signing in.
+            Generate a shareable link — this does{" "}
+            <span className="font-medium">not</span> email anyone. Share the link
+            yourself. If you enter an email, only that address can accept the
+            invite after signing in.
           </DialogDescription>
         </DialogHeader>
 

@@ -4,6 +4,8 @@ import { AppShell } from "@/components/layout/app-shell";
 import { BalanceSummary } from "@/components/groups/balance-summary";
 import { ExpenseList } from "@/components/expenses/expense-list";
 import { InviteDialog } from "@/components/groups/invite-dialog";
+import { DeleteGroupButton } from "@/components/groups/delete-group-button";
+import { GroupPageRefresh } from "@/components/groups/group-page-refresh";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { getCurrentProfile, getCurrentUser } from "@/actions/auth";
@@ -11,8 +13,12 @@ import { getGroup } from "@/actions/groups";
 import { getGroupExpenses } from "@/actions/expenses";
 import { getGroupBalances } from "@/actions/balances";
 import { getInitials } from "@/lib/format";
+import { canPerformOwnerAction } from "@/lib/auth/membership";
 import type { GroupMember, Expense } from "@/lib/types/database";
 import { ArrowLeft, Plus, HandCoins } from "lucide-react";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export default async function GroupDetailPage({
   params,
@@ -31,9 +37,19 @@ export default async function GroupDetailPage({
   if (!group) notFound();
 
   const members = (group.group_members as GroupMember[]) ?? [];
+  const viewerMembership = members.find((m) => m.user_id === user?.id);
+  const canManage = Boolean(
+    user?.id &&
+      canPerformOwnerAction({
+        role: viewerMembership?.role,
+        userId: user.id,
+        groupCreatedBy: group.created_by,
+      })
+  );
 
   return (
     <AppShell profile={profile}>
+      <GroupPageRefresh />
       <div className="space-y-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -50,7 +66,7 @@ export default async function GroupDetailPage({
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <InviteDialog groupId={id} />
+            <InviteDialog groupId={id} canInvite={canManage} />
             <Button variant="outline" size="sm" asChild>
               <Link href={`/groups/${id}/settlements`}>
                 <HandCoins className="mr-2 h-4 w-4" />
@@ -102,6 +118,27 @@ export default async function GroupDetailPage({
             <ExpenseList expenses={expenses as Expense[]} groupId={id} />
           </div>
         </section>
+
+        {canManage ? (
+          <section className="rounded-2xl border border-destructive/25 bg-destructive/5 p-6">
+            <h2 className="font-semibold text-destructive">Delete this group</h2>
+            <p className="mt-1 text-sm text-brand-muted">
+              Only admins and the group creator can delete. This permanently
+              removes expenses, settlements, and memberships.
+            </p>
+            <div className="mt-4">
+              <DeleteGroupButton groupId={id} groupName={group.name} />
+            </div>
+          </section>
+        ) : (
+          <section className="rounded-2xl border border-border/80 bg-card p-6 shadow-card">
+            <h2 className="font-semibold text-brand-muted">Delete this group</h2>
+            <p className="mt-1 text-sm text-brand-muted">
+              Only the group creator or an admin can delete this group. Ask them
+              if you need it removed.
+            </p>
+          </section>
+        )}
       </div>
     </AppShell>
   );

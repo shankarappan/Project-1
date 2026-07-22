@@ -4,11 +4,15 @@ import { DashboardCards } from "@/components/dashboard/dashboard-cards";
 import { RecentActivity } from "@/components/dashboard/recent-activity";
 import { GroupList } from "@/components/groups/group-list";
 import { Button } from "@/components/ui/button";
-import { getCurrentProfile, seedDemoDataAction } from "@/actions/auth";
+import { getCurrentProfile } from "@/actions/auth";
 import { getUserGroups } from "@/actions/groups";
 import { getRecentActivity } from "@/actions/expenses";
 import { getDashboardBalances } from "@/actions/balances";
-import { Plus, Sparkles } from "lucide-react";
+import { SeedDemoButton } from "@/components/settings/seed-demo-button";
+import { Plus } from "lucide-react";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export default async function DashboardPage() {
   const [profile, groups, activity, balances] = await Promise.all([
@@ -34,14 +38,7 @@ export default async function DashboardPage() {
             </p>
           </div>
           <div className="flex gap-2">
-            {groups.length === 0 && (
-              <form action={seedDemoDataAction}>
-                <Button type="submit" variant="outline" size="sm">
-                  <Sparkles className="mr-2 h-4 w-4" />
-                  Load demo
-                </Button>
-              </form>
-            )}
+            {groups.length === 0 && <SeedDemoButton />}
             <Button asChild size="sm" className="bg-brand-blue hover:bg-brand-blue/90">
               <Link href="/groups/new">
                 <Plus className="mr-2 h-4 w-4" />
@@ -61,7 +58,7 @@ export default async function DashboardPage() {
           <section className="rounded-2xl border border-border/80 bg-card p-6 shadow-card">
             <h2 className="text-lg font-semibold">Your groups</h2>
             <p className="mt-1 text-sm text-brand-muted">
-              Tap a group to view expenses and balances.
+              Tap a group to view expenses, or delete ones you admin.
             </p>
             <div className="mt-5">
               <GroupList groups={groups} />
