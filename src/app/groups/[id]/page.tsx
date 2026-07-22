@@ -74,9 +74,6 @@ export default async function GroupDetailPage({
                 Add expense
               </Link>
             </Button>
-            {canManage ? (
-              <DeleteGroupButton groupId={id} groupName={group.name} />
-            ) : null}
           </div>
         </div>
 
@@ -116,6 +113,27 @@ export default async function GroupDetailPage({
             <ExpenseList expenses={expenses as Expense[]} groupId={id} />
           </div>
         </section>
+
+        {canManage ? (
+          <section className="rounded-2xl border border-destructive/25 bg-destructive/5 p-6">
+            <h2 className="font-semibold text-destructive">Delete this group</h2>
+            <p className="mt-1 text-sm text-brand-muted">
+              Only admins and the group creator can delete. This permanently
+              removes expenses, settlements, and memberships.
+            </p>
+            <div className="mt-4">
+              <DeleteGroupButton groupId={id} groupName={group.name} />
+            </div>
+          </section>
+        ) : (
+          <section className="rounded-2xl border border-border/80 bg-card p-6 shadow-card">
+            <h2 className="font-semibold text-brand-muted">Delete this group</h2>
+            <p className="mt-1 text-sm text-brand-muted">
+              Only the group creator or an admin can delete this group. Ask them
+              if you need it removed.
+            </p>
+          </section>
+        )}
       </div>
     </AppShell>
   );

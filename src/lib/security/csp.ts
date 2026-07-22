@@ -15,9 +15,14 @@ export function buildContentSecurityPolicy(options: {
     .filter(Boolean)
     .join(" ");
 
+  // Next.js / Turbopack emit inline bootstrap scripts in development without a
+  // nonce pipeline. Keep production strict (self-only / nonce when provided).
+  const isDev = process.env.NODE_ENV !== "production";
   const scriptSrc = options.nonce
     ? `'self' 'nonce-${options.nonce}' 'strict-dynamic'`
-    : `'self'`;
+    : isDev
+      ? `'self' 'unsafe-inline'`
+      : `'self'`;
 
   const directives = [
     "default-src 'self'",

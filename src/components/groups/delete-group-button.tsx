@@ -100,13 +100,14 @@ export function DeleteGroupButton({
     return (
       <Button
         type="button"
-        size="icon"
+        size="sm"
         variant="ghost"
-        className="h-11 w-11 shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+        className="h-11 shrink-0 gap-1.5 px-2.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
         onClick={handleDelete}
         aria-label={`Delete group ${groupName}`}
       >
         <Trash2 className="h-4 w-4" />
+        <span className="text-sm font-medium">Delete</span>
       </Button>
     );
   }
