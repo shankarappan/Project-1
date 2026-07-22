@@ -782,6 +782,64 @@ async function testDuplicateExpenseIdempotency(clientA) {
   }
 }
 
+async function testDeleteGroupAuthorization(clientA, clientB) {
+  // Create a disposable group so the main fixture can still clean up safely.
+  const { data: disposable, error } = await clientA
+    .from("groups")
+    .insert({ name: `E2E Delete Me ${stamp}`, created_by: users.a.id })
+    .select("id")
+    .single();
+  if (error || !disposable) {
+    fail("Create disposable group for delete", error?.message ?? "no data");
+    return;
+  }
+
+  const disposableId = disposable.id;
+  const { error: memberError } = await clientA.from("group_members").insert([
+    { group_id: disposableId, user_id: users.a.id, role: "admin" },
+    { group_id: disposableId, user_id: users.b.id, role: "member" },
+  ]);
+  if (memberError) {
+    fail("Add members to disposable group", memberError.message);
+    await admin.from("groups").delete().eq("id", disposableId);
+    return;
+  }
+
+  const memberAttempt = await clientB
+    .from("groups")
+    .delete()
+    .eq("id", disposableId)
+    .select("id");
+  const memberBlocked =
+    Boolean(memberAttempt.error) || !memberAttempt.data?.length;
+  if (memberBlocked) ok("Non-admin cannot delete group");
+  else {
+    fail("Non-admin cannot delete group", "member deleted group");
+    return;
+  }
+
+  const adminAttempt = await clientA
+    .from("groups")
+    .delete()
+    .eq("id", disposableId)
+    .select("id");
+
+  const { data: remaining } = await admin
+    .from("groups")
+    .select("id")
+    .eq("id", disposableId)
+    .maybeSingle();
+
+  if (!remaining) ok("Admin can delete group");
+  else if (adminAttempt.error) {
+    fail("Admin can delete group", adminAttempt.error.message);
+    await admin.from("groups").delete().eq("id", disposableId);
+  } else {
+    fail("Admin can delete group", "group still present");
+    await admin.from("groups").delete().eq("id", disposableId);
+  }
+}
+
 async function cleanup() {
   if (groupId) {
     await admin.from("groups").delete().eq("id", groupId);
@@ -801,6 +859,7 @@ async function main() {
     await applyMigration("002_fix_group_rls.sql");
     await applyMigration("003_finance_safety.sql");
     await applyMigration("004_settlement_void.sql");
+    await applyMigration("006_group_delete.sql");
     await testUnitMathInline();
     await testSignInRedirectHttp();
     await testSecurityHeaders();
@@ -825,6 +884,7 @@ async function main() {
     await testUnauthorized(clientOut);
     await testConcurrency(clientA, clientB);
     await testDuplicateExpenseIdempotency(clientA);
+    await testDeleteGroupAuthorization(clientA, clientB);
   } catch (err) {
     fail("Unexpected error", err instanceof Error ? err.message : String(err));
   } finally {
