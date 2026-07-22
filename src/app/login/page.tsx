@@ -45,8 +45,8 @@ export default async function LoginPage({
               </h1>
               <p className="mt-2 text-sm text-brand-muted">
                 {inviteContext
-                  ? "Prefer Google or Apple if magic-link email is rate-limited. No password needed."
-                  : "Sign in with Google, Apple, or a magic link — no password needed."}
+                  ? "Use email & password if magic-link email is rate-limited. Google/Apple also work once enabled."
+                  : "Sign in with Google, Apple, email & password, or a magic link."}
               </p>
             </div>
 

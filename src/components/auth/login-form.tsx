@@ -8,6 +8,8 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   signInWithMagicLink,
   signInWithOAuthProvider,
+  signInWithPassword,
+  signUpWithPassword,
 } from "@/actions/auth";
 import {
   getMagicLinkCooldownRemainingMs,
@@ -16,18 +18,22 @@ import {
   setMagicLinkCooldown,
   validateEmail,
 } from "@/lib/auth/email";
+import { MIN_PASSWORD_LENGTH, validatePassword } from "@/lib/auth/password";
 import {
   getEnabledAuthMethods,
   oauthProviderLabel,
   type OAuthProvider,
 } from "@/lib/auth/oauth";
 import { Mail } from "lucide-react";
+import { isRedirectError } from "next/dist/client/components/redirect-error";
 
 interface LoginFormProps {
   redirectTo?: string;
   initialEmail?: string;
   inviteContext?: boolean;
 }
+
+type EmailAuthMode = "password" | "magic";
 
 function GoogleIcon() {
   return (
@@ -84,10 +90,16 @@ export function LoginForm({
   inviteContext = false,
 }: LoginFormProps) {
   const emailErrorId = useId();
+  const passwordErrorId = useId();
   const statusId = useId();
   const methods = getEnabledAuthMethods();
   const [email, setEmail] = useState(initialEmail);
+  const [password, setPassword] = useState("");
+  const [emailMode, setEmailMode] = useState<EmailAuthMode>(
+    methods.password ? "password" : "magic"
+  );
   const [fieldError, setFieldError] = useState<string | null>(null);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [statusTone, setStatusTone] = useState<"success" | "error" | null>(
     null
@@ -109,6 +121,91 @@ export function LoginForm({
     return () => window.clearInterval(id);
   }, [email]);
 
+  function clearStatus() {
+    setFieldError(null);
+    setPasswordError(null);
+    setStatusMessage(null);
+    setStatusTone(null);
+  }
+
+  async function runPasswordAuth(mode: "signin" | "signup") {
+    if (busy) return;
+
+    const emailValidation = validateEmail(email);
+    if (emailValidation.code !== "ok") {
+      setFieldError(emailValidation.message ?? "Enter a valid email address.");
+      setStatusMessage(null);
+      setStatusTone(null);
+      return;
+    }
+
+    const passwordValidation = validatePassword(password);
+    if (passwordValidation.code !== "ok") {
+      setPasswordError(passwordValidation.message ?? "Enter a password.");
+      setStatusMessage(null);
+      setStatusTone(null);
+      return;
+    }
+
+    setLoading(true);
+    clearStatus();
+
+    const formData = new FormData();
+    formData.set("email", emailValidation.email);
+    formData.set("password", passwordValidation.password);
+    formData.set("redirect", redirectTo);
+
+    try {
+      if (typeof navigator !== "undefined" && navigator.onLine === false) {
+        setStatusTone("error");
+        setStatusMessage(
+          "You appear to be offline. Check your connection and try again."
+        );
+        return;
+      }
+
+      const result =
+        mode === "signup"
+          ? await signUpWithPassword(formData)
+          : await signInWithPassword(formData);
+
+      if (result && "error" in result && result.error) {
+        if ("rateLimited" in result && result.rateLimited && methods.password) {
+          setEmailMode("password");
+        }
+        setStatusTone("error");
+        setStatusMessage(result.error);
+        return;
+      }
+
+      if (result && "success" in result && result.success) {
+        setStatusTone("success");
+        setStatusMessage(
+          result.message ??
+            ("needsEmailConfirmation" in result && result.needsEmailConfirmation
+              ? "Check your email to confirm your account."
+              : "Signed in.")
+        );
+      }
+    } catch (err) {
+      if (isRedirectError(err)) throw err;
+      setStatusTone("error");
+      setStatusMessage(
+        "Unable to reach the sign-in service. Check your connection and try again."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handlePasswordAuth(
+    event: React.FormEvent<HTMLFormElement>,
+    mode: "signin" | "signup"
+  ) {
+    event.preventDefault();
+    await runPasswordAuth(mode);
+  }
+
   async function handleMagicLink(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (busy) return;
@@ -128,15 +225,14 @@ export function LoginForm({
         `Please wait ${formatRemaining(remaining)} before requesting another magic link.`
       );
       setCooldownMs(remaining);
+      if (methods.password) setEmailMode("password");
       return;
     }
 
     setLoading(true);
-    setFieldError(null);
-    setStatusMessage(null);
-    setStatusTone(null);
+    clearStatus();
 
-    const formData = new FormData(event.currentTarget);
+    const formData = new FormData();
     formData.set("email", validation.email);
     formData.set("redirect", redirectTo);
 
@@ -158,6 +254,7 @@ export function LoginForm({
             MAGIC_LINK_RATE_LIMIT_COOLDOWN_MS
           );
           setCooldownMs(MAGIC_LINK_RATE_LIMIT_COOLDOWN_MS);
+          if (methods.password) setEmailMode("password");
         }
         setStatusTone("error");
         setStatusMessage(result.error);
@@ -172,7 +269,8 @@ export function LoginForm({
           result.message ?? "Check your email for a magic link."
         );
       }
-    } catch {
+    } catch (err) {
+      if (isRedirectError(err)) throw err;
       setStatusTone("error");
       setStatusMessage(
         "Unable to reach the sign-in service. Check your connection and try again."
@@ -184,9 +282,7 @@ export function LoginForm({
 
   function handleOAuth(provider: OAuthProvider) {
     if (busy) return;
-    setFieldError(null);
-    setStatusMessage(null);
-    setStatusTone(null);
+    clearStatus();
     setActiveOAuth(provider);
 
     startOAuthTransition(async () => {
@@ -208,6 +304,7 @@ export function LoginForm({
   }
 
   const showInvalid = Boolean(fieldError);
+  const showPasswordInvalid = Boolean(passwordError);
 
   return (
     <div className="space-y-5">
@@ -215,7 +312,7 @@ export function LoginForm({
         <Alert className="border-brand-teal/30 bg-brand-teal/5">
           <AlertDescription className="text-brand-navy">
             Sign in to accept your group invite. Invite links do not send email
-            by themselves.
+            by themselves — use email & password if magic links are rate-limited.
           </AlertDescription>
         </Alert>
       )}
@@ -239,7 +336,7 @@ export function LoginForm({
             </Button>
           ))}
 
-          {methods.magicLink && (
+          {(methods.password || methods.magicLink) && (
             <div className="relative py-1">
               <div className="absolute inset-0 flex items-center" aria-hidden="true">
                 <div className="w-full border-t border-border/80" />
@@ -252,45 +349,155 @@ export function LoginForm({
         </div>
       )}
 
-      {methods.magicLink && (
-        <form onSubmit={handleMagicLink} className="space-y-4" noValidate>
+      {methods.password && methods.magicLink ? (
+        <div
+          className="grid grid-cols-2 gap-1 rounded-lg bg-muted/60 p-1"
+          role="tablist"
+          aria-label="Email sign-in method"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={emailMode === "password"}
+            className={`rounded-md px-3 py-2 text-sm font-medium transition ${
+              emailMode === "password"
+                ? "bg-card text-brand-navy shadow-sm"
+                : "text-brand-muted hover:text-brand-navy"
+            }`}
+            onClick={() => {
+              setEmailMode("password");
+              clearStatus();
+            }}
+          >
+            Email & password
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={emailMode === "magic"}
+            className={`rounded-md px-3 py-2 text-sm font-medium transition ${
+              emailMode === "magic"
+                ? "bg-card text-brand-navy shadow-sm"
+                : "text-brand-muted hover:text-brand-navy"
+            }`}
+            onClick={() => {
+              setEmailMode("magic");
+              clearStatus();
+            }}
+          >
+            Magic link
+          </button>
+        </div>
+      ) : null}
+
+      {(methods.password || methods.magicLink) && (
+        <div className="space-y-2">
+          <Label htmlFor="email" className="text-brand-navy">
+            Email address
+          </Label>
+          <Input
+            id="email"
+            name="email"
+            type="email"
+            inputMode="email"
+            autoComplete="email"
+            placeholder="you@example.com"
+            value={email}
+            onChange={(event) => {
+              setEmail(event.target.value);
+              if (fieldError) setFieldError(null);
+            }}
+            aria-invalid={showInvalid || undefined}
+            aria-describedby={
+              showInvalid
+                ? emailErrorId
+                : statusMessage
+                  ? statusId
+                  : undefined
+            }
+            disabled={busy}
+            className="h-11 border-border/80 bg-background"
+          />
+          {fieldError && (
+            <p
+              id={emailErrorId}
+              role="alert"
+              className="text-sm text-destructive"
+            >
+              {fieldError}
+            </p>
+          )}
+        </div>
+      )}
+
+      {methods.password && emailMode === "password" && (
+        <form
+          onSubmit={(event) => handlePasswordAuth(event, "signin")}
+          className="space-y-4"
+          noValidate
+        >
           <div className="space-y-2">
-            <Label htmlFor="email" className="text-brand-navy">
-              Email address
+            <Label htmlFor="password" className="text-brand-navy">
+              Password
             </Label>
             <Input
-              id="email"
-              name="email"
-              type="email"
-              inputMode="email"
-              autoComplete="email"
-              placeholder="you@example.com"
-              value={email}
+              id="password"
+              name="password"
+              type="password"
+              autoComplete="current-password"
+              placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
+              value={password}
               onChange={(event) => {
-                setEmail(event.target.value);
-                if (fieldError) setFieldError(null);
+                setPassword(event.target.value);
+                if (passwordError) setPasswordError(null);
               }}
-              aria-invalid={showInvalid || undefined}
+              aria-invalid={showPasswordInvalid || undefined}
               aria-describedby={
-                showInvalid
-                  ? emailErrorId
-                  : statusMessage
-                    ? statusId
-                    : undefined
+                showPasswordInvalid ? passwordErrorId : undefined
               }
               disabled={busy}
               className="h-11 border-border/80 bg-background"
             />
-            {fieldError && (
+            {passwordError && (
               <p
-                id={emailErrorId}
+                id={passwordErrorId}
                 role="alert"
                 className="text-sm text-destructive"
               >
-                {fieldError}
+                {passwordError}
               </p>
             )}
           </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Button
+              type="submit"
+              className="h-11 w-full bg-brand-blue text-base hover:bg-brand-blue/90"
+              disabled={busy}
+              aria-busy={loading}
+            >
+              {loading ? "Signing in..." : "Sign in"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11 w-full text-base"
+              disabled={busy}
+              onClick={() => {
+                void runPasswordAuth("signup");
+              }}
+            >
+              {loading ? "Creating..." : "Create account"}
+            </Button>
+          </div>
+          <p className="text-center text-xs text-brand-muted">
+            Password sign-up does not send email, so it works even when magic
+            links are rate-limited.
+          </p>
+        </form>
+      )}
+
+      {methods.magicLink && emailMode === "magic" && (
+        <form onSubmit={handleMagicLink} className="space-y-4" noValidate>
           <Button
             type="submit"
             className="h-11 w-full bg-brand-blue text-base hover:bg-brand-blue/90"
@@ -304,6 +511,12 @@ export function LoginForm({
                 ? `Wait ${formatRemaining(cooldownMs)}`
                 : "Send magic link"}
           </Button>
+          {coolingDown ? (
+            <p className="text-center text-xs text-brand-muted">
+              Built-in auth email is limited to a few sends per hour. Prefer
+              email & password until the cooldown ends.
+            </p>
+          ) : null}
         </form>
       )}
 

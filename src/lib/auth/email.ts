@@ -45,7 +45,7 @@ export function mapAuthServiceError(message: string): string {
   const lower = message.toLowerCase();
 
   if (isEmailRateLimitError(message)) {
-    return "Too many magic-link emails were sent recently. Please wait about 60 minutes, or sign in with Google/Apple instead.";
+    return "Too many auth emails were sent recently (Supabase allows only a few per hour on the built-in mailer). Use email & password or Google/Apple instead, or wait about 60 minutes.";
   }
 
   if (lower.includes("too many") || lower.includes("rate")) {

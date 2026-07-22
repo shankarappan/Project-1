@@ -28,15 +28,14 @@ export default async function InvitePage({
               <h1 className="text-2xl font-bold">You’re invited</h1>
               <p className="mt-3 text-sm text-brand-muted">
                 Sign in to join this group. Invite links don’t send email
-                themselves — use Google, Apple, or a magic link on the next
-                screen.
+                themselves — use email & password (or Google/Apple) on the next
+                screen if magic links are rate-limited.
               </p>
               <Button asChild className="mt-8 min-h-11 w-full bg-brand-blue hover:bg-brand-blue/90">
                 <Link href={loginHref}>Continue to sign in</Link>
               </Button>
               <p className="mt-4 text-xs text-brand-muted">
-                If magic-link email is rate limited, wait about an hour or use
-                Google/Apple SSO once it’s enabled.
+                Prefer Create account with a password — it does not send email.
               </p>
             </div>
           </div>

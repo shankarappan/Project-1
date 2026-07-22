@@ -6,10 +6,11 @@ describe("oauth helpers", () => {
     delete process.env.NEXT_PUBLIC_AUTH_PROVIDERS;
   });
 
-  it("defaults to magic + google + apple", () => {
+  it("defaults to magic + password + google + apple", () => {
     delete process.env.NEXT_PUBLIC_AUTH_PROVIDERS;
     expect(getEnabledAuthMethods()).toEqual({
       magicLink: true,
+      password: true,
       oauth: ["google", "apple"],
     });
   });
@@ -18,6 +19,7 @@ describe("oauth helpers", () => {
     process.env.NEXT_PUBLIC_AUTH_PROVIDERS = "magic,google";
     expect(getEnabledAuthMethods()).toEqual({
       magicLink: true,
+      password: false,
       oauth: ["google"],
     });
   });

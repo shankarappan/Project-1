@@ -35,13 +35,13 @@ describe("isEmailRateLimitError", () => {
 describe("mapAuthServiceError", () => {
   it("maps email rate limiting with a clear wait message", () => {
     expect(mapAuthServiceError("email rate limit exceeded")).toMatch(
-      /60 minutes|google\/apple/i
+      /60 minutes|password|google\/apple/i
     );
   });
 
   it("maps rate limiting", () => {
     expect(mapAuthServiceError("Rate limit exceeded")).toMatch(
-      /60 minutes|too many/i
+      /60 minutes|too many|password/i
     );
   });
 

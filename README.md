@@ -69,10 +69,13 @@ This creates all tables, triggers, RLS policies, and the demo seed function.
 
 ### 5. Configure auth
 
-**Magic link (works out of the box)**
+**Magic link + email & password**
 
 - In Supabase → Authentication → URL Configuration, set Site URL to `http://localhost:3000`.
 - Add redirect URL: `http://localhost:3000/auth/callback`
+- Prefer **Email & password** on the login screen when testing invites/signups — Supabase’s built-in mailer only allows about **2 emails/hour**, which causes `email rate limit exceeded` on magic links.
+- For password signup without confirmation emails, set `SUPABASE_SERVICE_ROLE_KEY` in the server env (Vercel + `.env.local`). The app auto-confirms new users via the Admin API.
+- For production magic links, configure **custom SMTP** in Supabase → Authentication → SMTP (Resend/SendGrid/etc.). That raises the email rate limit.
 
 **SSO / OAuth (Google, Apple)**
 
@@ -88,7 +91,7 @@ Toggle which buttons appear with:
 
 ```bash
 # .env.local / Vercel env
-NEXT_PUBLIC_AUTH_PROVIDERS=magic,google,apple
+NEXT_PUBLIC_AUTH_PROVIDERS=magic,password,google,apple
 ```
 
 **Google OAuth**

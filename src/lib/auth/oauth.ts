@@ -3,15 +3,16 @@ export type OAuthProvider = "google" | "apple";
 export const OAUTH_PROVIDERS: OAuthProvider[] = ["google", "apple"];
 
 /**
- * Which SSO providers to show on the login screen.
- * Configure with NEXT_PUBLIC_AUTH_PROVIDERS=magic,google,apple
- * (comma-separated). Defaults to magic + google + apple.
+ * Which auth methods to show on the login screen.
+ * Configure with NEXT_PUBLIC_AUTH_PROVIDERS=magic,password,google,apple
+ * (comma-separated). Defaults to magic + password + google + apple.
  *
- * Enabling a button does not configure the provider in Supabase —
+ * Enabling an OAuth button does not configure the provider in Supabase —
  * that still requires Client ID/Secret (and Apple Developer setup).
  */
 export function getEnabledAuthMethods(): {
   magicLink: boolean;
+  password: boolean;
   oauth: OAuthProvider[];
 } {
   const raw = process.env.NEXT_PUBLIC_AUTH_PROVIDERS?.trim();
@@ -20,7 +21,7 @@ export function getEnabledAuthMethods(): {
         .split(",")
         .map((part) => part.trim().toLowerCase())
         .filter(Boolean)
-    : ["magic", "google", "apple"];
+    : ["magic", "password", "google", "apple"];
 
   const oauth = OAUTH_PROVIDERS.filter((provider) =>
     methods.includes(provider)
@@ -28,6 +29,7 @@ export function getEnabledAuthMethods(): {
 
   return {
     magicLink: methods.includes("magic") || methods.length === 0,
+    password: methods.includes("password") || methods.length === 0,
     oauth,
   };
 }
