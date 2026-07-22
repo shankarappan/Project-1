@@ -1,4 +1,4 @@
-import Link from "next/link";
+import { RefreshLink } from "@/components/navigation/refresh-link";
 import { Users, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -23,7 +23,7 @@ export function GroupList({ groups }: GroupListProps) {
         description="Create a group to start splitting expenses with friends, flatmates, or travel buddies."
         action={
           <Button asChild>
-            <Link href="/groups/new">Create your first group</Link>
+            <RefreshLink href="/groups/new">Create your first group</RefreshLink>
           </Button>
         }
       />
@@ -37,7 +37,7 @@ export function GroupList({ groups }: GroupListProps) {
           key={group.id}
           className="flex items-center gap-2 rounded-xl border border-border/80 bg-card p-2 shadow-sm transition-all hover:border-brand-blue/30 hover:shadow-card sm:gap-3 sm:p-3"
         >
-          <Link
+          <RefreshLink
             href={`/groups/${group.id}`}
             className="group flex min-w-0 flex-1 items-center gap-4 rounded-lg p-2"
           >
@@ -58,7 +58,7 @@ export function GroupList({ groups }: GroupListProps) {
               </p>
             </div>
             <ChevronRight className="h-4 w-4 shrink-0 text-brand-muted transition-transform group-hover:translate-x-0.5 group-hover:text-brand-blue" />
-          </Link>
+          </RefreshLink>
           {group.canDelete ? (
             <DeleteGroupButton
               groupId={group.id}

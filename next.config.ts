@@ -30,6 +30,34 @@ const nextConfig: NextConfig = {
         source: "/:path*",
         headers: securityHeaderList,
       },
+      {
+        // Authenticated app surfaces should never be served from a long-lived edge cache.
+        source: "/dashboard",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "private, no-store, max-age=0, must-revalidate",
+          },
+        ],
+      },
+      {
+        source: "/groups/:path*",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "private, no-store, max-age=0, must-revalidate",
+          },
+        ],
+      },
+      {
+        source: "/settings",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "private, no-store, max-age=0, must-revalidate",
+          },
+        ],
+      },
     ];
   },
 };

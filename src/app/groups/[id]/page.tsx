@@ -5,6 +5,7 @@ import { BalanceSummary } from "@/components/groups/balance-summary";
 import { ExpenseList } from "@/components/expenses/expense-list";
 import { InviteDialog } from "@/components/groups/invite-dialog";
 import { DeleteGroupButton } from "@/components/groups/delete-group-button";
+import { GroupPageRefresh } from "@/components/groups/group-page-refresh";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { getCurrentProfile, getCurrentUser } from "@/actions/auth";
@@ -15,6 +16,9 @@ import { getInitials } from "@/lib/format";
 import { canPerformOwnerAction } from "@/lib/auth/membership";
 import type { GroupMember, Expense } from "@/lib/types/database";
 import { ArrowLeft, Plus, HandCoins } from "lucide-react";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export default async function GroupDetailPage({
   params,
@@ -45,6 +49,7 @@ export default async function GroupDetailPage({
 
   return (
     <AppShell profile={profile}>
+      <GroupPageRefresh />
       <div className="space-y-6">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
