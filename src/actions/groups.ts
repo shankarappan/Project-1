@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient, getAuthUser } from "@/lib/supabase/cached";
 import { ensureProfile } from "@/lib/ensure-profile";
-import { requireGroupAdmin, requireGroupMember } from "@/lib/auth/membership";
+import { requireGroupAdmin, requireGroupMember, canPerformOwnerAction } from "@/lib/auth/membership";
 import { logger } from "@/lib/logging/logger";
 import { randomBytes } from "crypto";
 
@@ -53,7 +53,7 @@ export async function getUserGroups() {
   const supabase = await createClient();
   const { data: memberships } = await supabase
     .from("group_members")
-    .select("group_id, groups(id, name, created_at, created_by)")
+    .select("role, group_id, groups(id, name, created_at, created_by)")
     .eq("user_id", user.id)
     .order("joined_at", { ascending: false });
 
@@ -61,10 +61,33 @@ export async function getUserGroups() {
     memberships
       ?.map((m) => {
         const group = m.groups;
-        if (Array.isArray(group)) return group[0];
-        return group;
+        const resolved = Array.isArray(group) ? group[0] : group;
+        if (!resolved) return null;
+        return {
+          id: resolved.id,
+          name: resolved.name,
+          created_at: resolved.created_at,
+          created_by: resolved.created_by,
+          role: m.role as string,
+          canDelete: canPerformOwnerAction({
+            role: m.role as string,
+            userId: user.id,
+            groupCreatedBy: resolved.created_by,
+          }),
+        };
       })
-      .filter((g): g is { id: string; name: string; created_at: string; created_by: string } => g != null) ?? []
+      .filter(
+        (
+          g
+        ): g is {
+          id: string;
+          name: string;
+          created_at: string;
+          created_by: string;
+          role: string;
+          canDelete: boolean;
+        } => g != null
+      ) ?? []
   );
 }
 
@@ -193,4 +216,44 @@ export async function acceptInvite(token: string) {
 
   revalidatePath(`/groups/${invite.group_id}`);
   redirect(`/groups/${invite.group_id}`);
+}
+
+export async function deleteGroup(groupId: string) {
+  const user = await getAuthUser();
+  if (!user) {
+    return { error: "Not authenticated." };
+  }
+
+  const supabase = await createClient();
+  const admin = await requireGroupAdmin(supabase, groupId, user.id);
+  if (!admin.ok) {
+    return { error: admin.error };
+  }
+
+  const { data: group, error: lookupError } = await supabase
+    .from("groups")
+    .select("id, name")
+    .eq("id", groupId)
+    .maybeSingle();
+
+  if (lookupError || !group) {
+    return { error: "Group not found." };
+  }
+
+  const { error } = await supabase.from("groups").delete().eq("id", groupId);
+
+  if (error) {
+    logger.warn("delete_group_failed", {
+      code: error.code ?? "unknown",
+      groupId,
+    });
+    return {
+      error:
+        "Could not delete this group. If this keeps happening, apply migration 006_group_delete.sql in Supabase.",
+    };
+  }
+
+  revalidatePath("/dashboard");
+  revalidatePath(`/groups/${groupId}`);
+  redirect("/dashboard");
 }

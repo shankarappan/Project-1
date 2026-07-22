@@ -55,7 +55,7 @@ export default async function DashboardPage() {
           <section className="rounded-2xl border border-border/80 bg-card p-6 shadow-card">
             <h2 className="text-lg font-semibold">Your groups</h2>
             <p className="mt-1 text-sm text-brand-muted">
-              Tap a group to view expenses and balances.
+              Tap a group to view expenses, or delete ones you admin.
             </p>
             <div className="mt-5">
               <GroupList groups={groups} />

@@ -4,6 +4,7 @@ import { AppShell } from "@/components/layout/app-shell";
 import { BalanceSummary } from "@/components/groups/balance-summary";
 import { ExpenseList } from "@/components/expenses/expense-list";
 import { InviteDialog } from "@/components/groups/invite-dialog";
+import { DeleteGroupButton } from "@/components/groups/delete-group-button";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { getCurrentProfile, getCurrentUser } from "@/actions/auth";
@@ -11,6 +12,7 @@ import { getGroup } from "@/actions/groups";
 import { getGroupExpenses } from "@/actions/expenses";
 import { getGroupBalances } from "@/actions/balances";
 import { getInitials } from "@/lib/format";
+import { canPerformOwnerAction } from "@/lib/auth/membership";
 import type { GroupMember, Expense } from "@/lib/types/database";
 import { ArrowLeft, Plus, HandCoins } from "lucide-react";
 
@@ -32,8 +34,14 @@ export default async function GroupDetailPage({
 
   const members = (group.group_members as GroupMember[]) ?? [];
   const viewerMembership = members.find((m) => m.user_id === user?.id);
-  const canInvite =
-    viewerMembership?.role === "admin" || group.created_by === user?.id;
+  const canManage = Boolean(
+    user?.id &&
+      canPerformOwnerAction({
+        role: viewerMembership?.role,
+        userId: user.id,
+        groupCreatedBy: group.created_by,
+      })
+  );
 
   return (
     <AppShell profile={profile}>
@@ -53,7 +61,7 @@ export default async function GroupDetailPage({
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <InviteDialog groupId={id} canInvite={Boolean(canInvite)} />
+            <InviteDialog groupId={id} canInvite={canManage} />
             <Button variant="outline" size="sm" asChild>
               <Link href={`/groups/${id}/settlements`}>
                 <HandCoins className="mr-2 h-4 w-4" />
@@ -66,6 +74,9 @@ export default async function GroupDetailPage({
                 Add expense
               </Link>
             </Button>
+            {canManage ? (
+              <DeleteGroupButton groupId={id} groupName={group.name} />
+            ) : null}
           </div>
         </div>
 
