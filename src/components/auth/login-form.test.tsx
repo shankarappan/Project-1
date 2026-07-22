@@ -38,8 +38,17 @@ describe("LoginForm", () => {
     ).toBeInTheDocument();
   });
 
-  it("defaults to email & password for signup without magic-link email", () => {
+  it("defaults to magic link send button", () => {
     render(<LoginForm />);
+    expect(
+      screen.getByRole("button", { name: /send magic link/i })
+    ).toBeInTheDocument();
+  });
+
+  it("shows password controls after switching tab", async () => {
+    const user = userEvent.setup();
+    render(<LoginForm />);
+    await user.click(screen.getByRole("tab", { name: /email & password/i }));
     expect(
       screen.getByRole("button", { name: /create account/i })
     ).toBeInTheDocument();
@@ -52,12 +61,12 @@ describe("LoginForm", () => {
     const user = userEvent.setup();
     render(<LoginForm />);
 
-    await user.click(screen.getByRole("button", { name: /^sign in$/i }));
+    await user.click(screen.getByRole("button", { name: /send magic link/i }));
 
     const input = screen.getByLabelText(/email address/i);
     expect(input).toHaveAttribute("aria-invalid", "true");
     expect(screen.getByRole("alert")).toHaveTextContent(/enter your email/i);
-    expect(signInWithPassword).not.toHaveBeenCalled();
+    expect(signInWithMagicLink).not.toHaveBeenCalled();
   });
 
   it("shows inline error for invalid email format", async () => {
@@ -65,15 +74,16 @@ describe("LoginForm", () => {
     render(<LoginForm />);
 
     await user.type(screen.getByLabelText(/email address/i), "not-valid");
-    await user.click(screen.getByRole("button", { name: /^sign in$/i }));
+    await user.click(screen.getByRole("button", { name: /send magic link/i }));
 
     expect(screen.getByRole("alert")).toHaveTextContent(/valid email/i);
-    expect(signInWithPassword).not.toHaveBeenCalled();
+    expect(signInWithMagicLink).not.toHaveBeenCalled();
   });
 
   it("requires a password before signing in", async () => {
     const user = userEvent.setup();
     render(<LoginForm />);
+    await user.click(screen.getByRole("tab", { name: /email & password/i }));
 
     await user.type(
       screen.getByLabelText(/email address/i),
@@ -96,6 +106,7 @@ describe("LoginForm", () => {
     );
 
     render(<LoginForm />);
+    await user.click(screen.getByRole("tab", { name: /email & password/i }));
     const input = screen.getByLabelText(/email address/i);
     await user.type(input, "you@example.com");
     await user.type(screen.getByLabelText(/^password$/i), "long-enough");
@@ -125,7 +136,6 @@ describe("LoginForm", () => {
     });
 
     render(<LoginForm />);
-    await user.click(screen.getByRole("tab", { name: /magic link/i }));
     await user.type(
       screen.getByLabelText(/email address/i),
       "you@example.com"
@@ -139,7 +149,7 @@ describe("LoginForm", () => {
     });
   });
 
-  it("switches to password mode after magic-link rate limit", async () => {
+  it("keeps password available after magic-link rate limit", async () => {
     const user = userEvent.setup();
     signInWithMagicLink.mockResolvedValue({
       error: "Too many auth emails were sent recently.",
@@ -147,7 +157,6 @@ describe("LoginForm", () => {
     });
 
     render(<LoginForm />);
-    await user.click(screen.getByRole("tab", { name: /magic link/i }));
     await user.type(
       screen.getByLabelText(/email address/i),
       "you@example.com"

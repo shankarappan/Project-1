@@ -96,7 +96,7 @@ export function LoginForm({
   const [email, setEmail] = useState(initialEmail);
   const [password, setPassword] = useState("");
   const [emailMode, setEmailMode] = useState<EmailAuthMode>(
-    methods.password ? "password" : "magic"
+    methods.magicLink ? "magic" : "password"
   );
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
@@ -358,22 +358,6 @@ export function LoginForm({
           <button
             type="button"
             role="tab"
-            aria-selected={emailMode === "password"}
-            className={`rounded-md px-3 py-2 text-sm font-medium transition ${
-              emailMode === "password"
-                ? "bg-card text-brand-navy shadow-sm"
-                : "text-brand-muted hover:text-brand-navy"
-            }`}
-            onClick={() => {
-              setEmailMode("password");
-              clearStatus();
-            }}
-          >
-            Email & password
-          </button>
-          <button
-            type="button"
-            role="tab"
             aria-selected={emailMode === "magic"}
             className={`rounded-md px-3 py-2 text-sm font-medium transition ${
               emailMode === "magic"
@@ -386,6 +370,22 @@ export function LoginForm({
             }}
           >
             Magic link
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={emailMode === "password"}
+            className={`rounded-md px-3 py-2 text-sm font-medium transition ${
+              emailMode === "password"
+                ? "bg-card text-brand-navy shadow-sm"
+                : "text-brand-muted hover:text-brand-navy"
+            }`}
+            onClick={() => {
+              setEmailMode("password");
+              clearStatus();
+            }}
+          >
+            Email & password
           </button>
         </div>
       ) : null}

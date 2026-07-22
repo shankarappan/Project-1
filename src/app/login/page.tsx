@@ -3,6 +3,8 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { LoginForm } from "@/components/auth/login-form";
 import { mapAuthServiceError } from "@/lib/auth/email";
 
+export const dynamic = "force-dynamic";
+
 const AUTH_ERRORS: Record<string, string> = {
   auth: "Sign-in failed. The link may have expired — try again with SSO or a new magic link.",
   missing_code: "Invalid sign-in link. Please try again with SSO or request a new magic link.",
