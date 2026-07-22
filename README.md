@@ -59,13 +59,7 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 
 ### 4. Run database migrations
 
-In the Supabase **SQL Editor**, run the contents of:
-
-```
-supabase/migrations/001_schema.sql
-```
-
-This creates all tables, triggers, RLS policies, and the demo seed function.
+In the Supabase **SQL Editor**, run the migration files in order under `supabase/migrations/` (at least `001_schema.sql`). Later expand-only migrations (`003`–`006`) add finance safety, settlement void, demo seed RPC, and **group delete** RLS — apply those before deploying app builds that depend on them.
 
 ### 5. Configure auth
 
