@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { mapAuthServiceError, validateEmail } from "./email";
+import {
+  isEmailRateLimitError,
+  mapAuthServiceError,
+  validateEmail,
+} from "./email";
 
 describe("validateEmail", () => {
   it("rejects empty email", () => {
@@ -20,9 +24,25 @@ describe("validateEmail", () => {
   });
 });
 
+describe("isEmailRateLimitError", () => {
+  it("detects Supabase email rate limit wording", () => {
+    expect(isEmailRateLimitError("email rate limit exceeded")).toBe(true);
+    expect(isEmailRateLimitError("Rate limit exceeded")).toBe(true);
+    expect(isEmailRateLimitError("invalid login credentials")).toBe(false);
+  });
+});
+
 describe("mapAuthServiceError", () => {
+  it("maps email rate limiting with a clear wait message", () => {
+    expect(mapAuthServiceError("email rate limit exceeded")).toMatch(
+      /60 minutes|google\/apple/i
+    );
+  });
+
   it("maps rate limiting", () => {
-    expect(mapAuthServiceError("Rate limit exceeded")).toMatch(/too many/i);
+    expect(mapAuthServiceError("Rate limit exceeded")).toMatch(
+      /60 minutes|too many/i
+    );
   });
 
   it("maps network failures", () => {

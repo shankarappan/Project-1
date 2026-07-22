@@ -143,7 +143,7 @@ export async function acceptInvite(token: string) {
   const user = await getAuthUser();
 
   if (!user) {
-    redirect(`/login?redirect=/invite/${token}`);
+    return { needsAuth: true as const, token };
   }
 
   const supabase = await createClient();
@@ -163,10 +163,20 @@ export async function acceptInvite(token: string) {
     return { error: "This invite has expired." };
   }
 
+  // If invite is email-scoped, require matching signed-in email
+  if (invite.email) {
+    const profileEmail = user.email?.toLowerCase();
+    if (!profileEmail || profileEmail !== invite.email.toLowerCase()) {
+      return {
+        error: `This invite is for ${invite.email}. Sign in with that email to join.`,
+      };
+    }
+  }
+
   const { error: memberError } = await supabase.from("group_members").upsert(
     {
       group_id: invite.group_id,
-      user_id: user!.id,
+      user_id: user.id,
       role: "member",
     },
     { onConflict: "group_id,user_id" }
@@ -178,7 +188,7 @@ export async function acceptInvite(token: string) {
 
   await supabase
     .from("invites")
-    .update({ accepted_by: user!.id })
+    .update({ accepted_by: user.id })
     .eq("id", invite.id);
 
   revalidatePath(`/groups/${invite.group_id}`);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState, useTransition } from "react";
+import { useEffect, useId, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -9,7 +9,13 @@ import {
   signInWithMagicLink,
   signInWithOAuthProvider,
 } from "@/actions/auth";
-import { validateEmail } from "@/lib/auth/email";
+import {
+  getMagicLinkCooldownRemainingMs,
+  MAGIC_LINK_COOLDOWN_MS,
+  MAGIC_LINK_RATE_LIMIT_COOLDOWN_MS,
+  setMagicLinkCooldown,
+  validateEmail,
+} from "@/lib/auth/email";
 import {
   getEnabledAuthMethods,
   oauthProviderLabel,
@@ -19,6 +25,8 @@ import { Mail } from "lucide-react";
 
 interface LoginFormProps {
   redirectTo?: string;
+  initialEmail?: string;
+  inviteContext?: boolean;
 }
 
 function GoogleIcon() {
@@ -63,21 +71,43 @@ function AppleIcon() {
   );
 }
 
-export function LoginForm({ redirectTo = "/dashboard" }: LoginFormProps) {
+function formatRemaining(ms: number): string {
+  const totalSec = Math.ceil(ms / 1000);
+  if (totalSec < 60) return `${totalSec}s`;
+  const mins = Math.ceil(totalSec / 60);
+  return `${mins} min`;
+}
+
+export function LoginForm({
+  redirectTo = "/dashboard",
+  initialEmail = "",
+  inviteContext = false,
+}: LoginFormProps) {
   const emailErrorId = useId();
   const statusId = useId();
   const methods = getEnabledAuthMethods();
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(initialEmail);
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [statusTone, setStatusTone] = useState<"success" | "error" | null>(
     null
   );
   const [loading, setLoading] = useState(false);
+  const [cooldownMs, setCooldownMs] = useState(0);
   const [oauthPending, startOAuthTransition] = useTransition();
   const [activeOAuth, setActiveOAuth] = useState<OAuthProvider | null>(null);
 
   const busy = loading || oauthPending;
+  const coolingDown = cooldownMs > 0;
+
+  useEffect(() => {
+    const tick = () => {
+      setCooldownMs(getMagicLinkCooldownRemainingMs(email));
+    };
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [email]);
 
   async function handleMagicLink(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -88,6 +118,16 @@ export function LoginForm({ redirectTo = "/dashboard" }: LoginFormProps) {
       setFieldError(validation.message ?? "Enter a valid email address.");
       setStatusMessage(null);
       setStatusTone(null);
+      return;
+    }
+
+    const remaining = getMagicLinkCooldownRemainingMs(validation.email);
+    if (remaining > 0) {
+      setStatusTone("error");
+      setStatusMessage(
+        `Please wait ${formatRemaining(remaining)} before requesting another magic link.`
+      );
+      setCooldownMs(remaining);
       return;
     }
 
@@ -112,12 +152,21 @@ export function LoginForm({ redirectTo = "/dashboard" }: LoginFormProps) {
       const result = await signInWithMagicLink(formData);
 
       if (result.error) {
+        if (result.rateLimited) {
+          setMagicLinkCooldown(
+            validation.email,
+            MAGIC_LINK_RATE_LIMIT_COOLDOWN_MS
+          );
+          setCooldownMs(MAGIC_LINK_RATE_LIMIT_COOLDOWN_MS);
+        }
         setStatusTone("error");
         setStatusMessage(result.error);
         return;
       }
 
       if (result.success) {
+        setMagicLinkCooldown(validation.email, MAGIC_LINK_COOLDOWN_MS);
+        setCooldownMs(MAGIC_LINK_COOLDOWN_MS);
         setStatusTone("success");
         setStatusMessage(
           result.message ?? "Check your email for a magic link."
@@ -148,7 +197,6 @@ export function LoginForm({ redirectTo = "/dashboard" }: LoginFormProps) {
           setStatusMessage(result.error);
           setActiveOAuth(null);
         }
-        // On success Next.js redirects away to the provider.
       } catch {
         setStatusTone("error");
         setStatusMessage(
@@ -163,6 +211,15 @@ export function LoginForm({ redirectTo = "/dashboard" }: LoginFormProps) {
 
   return (
     <div className="space-y-5">
+      {inviteContext && (
+        <Alert className="border-brand-teal/30 bg-brand-teal/5">
+          <AlertDescription className="text-brand-navy">
+            Sign in to accept your group invite. Invite links do not send email
+            by themselves.
+          </AlertDescription>
+        </Alert>
+      )}
+
       {methods.oauth.length > 0 && (
         <div className="space-y-3">
           {methods.oauth.map((provider) => (
@@ -237,11 +294,15 @@ export function LoginForm({ redirectTo = "/dashboard" }: LoginFormProps) {
           <Button
             type="submit"
             className="h-11 w-full bg-brand-blue text-base hover:bg-brand-blue/90"
-            disabled={busy}
+            disabled={busy || coolingDown}
             aria-busy={loading}
           >
             <Mail className="mr-2 h-4 w-4" />
-            {loading ? "Sending link..." : "Send magic link"}
+            {loading
+              ? "Sending link..."
+              : coolingDown
+                ? `Wait ${formatRemaining(cooldownMs)}`
+                : "Send magic link"}
           </Button>
         </form>
       )}

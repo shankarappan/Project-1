@@ -3,7 +3,11 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient, getAuthUser } from "@/lib/supabase/cached";
-import { mapAuthServiceError, validateEmail } from "@/lib/auth/email";
+import {
+  isEmailRateLimitError,
+  mapAuthServiceError,
+  validateEmail,
+} from "@/lib/auth/email";
 import { ensureProfile } from "@/lib/ensure-profile";
 import {
   oauthProviderLabel,
@@ -35,7 +39,11 @@ export async function signInWithMagicLink(formData: FormData) {
         code: error.status ?? "unknown",
         name: error.name,
       });
-      return { error: mapAuthServiceError(error.message) };
+      const mapped = mapAuthServiceError(error.message);
+      return {
+        error: mapped,
+        rateLimited: isEmailRateLimitError(error.message),
+      };
     }
 
     return {
