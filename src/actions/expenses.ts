@@ -15,7 +15,9 @@ import {
   assertMembersOfGroup,
   requireGroupMember,
 } from "@/lib/auth/membership";
+import { userFacingActionError } from "@/lib/logging/safe-error";
 import type { SplitType } from "@/lib/types/database";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 function unwrapRelation<T>(value: T | T[] | null | undefined): T | null {
   if (value == null) return null;
@@ -27,6 +29,12 @@ interface ParticipantInput {
   userId: string;
   exactAmountCents?: number;
   percentageCentipercent?: number;
+}
+
+interface SplitRow {
+  userId: string;
+  shareAmount: number;
+  sharePercentage: number | null;
 }
 
 function parseParticipants(
@@ -63,6 +71,121 @@ function parseParticipants(
   });
 }
 
+function participantPayload(splits: SplitRow[]) {
+  return splits.map((split) => ({
+    user_id: split.userId,
+    share_amount: split.shareAmount,
+    share_percentage:
+      split.sharePercentage == null ? "" : String(split.sharePercentage),
+  }));
+}
+
+function isRpcMissing(error: { code?: string; message?: string } | null) {
+  if (!error) return false;
+  return (
+    error.code === "PGRST202" ||
+    /could not find the function|create_expense_atomic|update_expense_atomic/i.test(
+      error.message ?? ""
+    )
+  );
+}
+
+async function parseExpenseForm(
+  formData: FormData,
+  supabase: SupabaseClient,
+  groupId: string
+): Promise<
+  | {
+      ok: true;
+      title: string;
+      description: string | null;
+      amount: number;
+      currency: string;
+      paidBy: string;
+      splitType: SplitType;
+      expenseDate: string;
+      splits: SplitRow[];
+    }
+  | { ok: false; error: string }
+> {
+  const title = String(formData.get("title") ?? "").trim();
+  const description = String(formData.get("description") ?? "").trim() || null;
+  const amountRaw = String(formData.get("amount") ?? "");
+  const paidBy = String(formData.get("paid_by") ?? "");
+  const splitType = String(formData.get("split_type") ?? "equal") as SplitType;
+  const expenseDate = String(formData.get("expense_date") ?? "");
+  const currency = String(formData.get("currency") ?? "NZD");
+  const participantIds = Array.from(
+    new Set(formData.getAll("participant_ids").map(String).filter(Boolean))
+  );
+
+  if (!title) return { ok: false, error: "Title is required." };
+  if (!paidBy) return { ok: false, error: "Select who paid." };
+  if (!["equal", "exact", "percentage"].includes(splitType)) {
+    return { ok: false, error: "Invalid split type." };
+  }
+  if (participantIds.length === 0) {
+    return { ok: false, error: "Select at least one participant." };
+  }
+
+  let amountCents: number;
+  try {
+    amountCents = parseMoneyToCents(amountRaw);
+  } catch (err) {
+    return {
+      ok: false,
+      error:
+        err instanceof MoneyParseError ? err.message : "Enter a valid amount.",
+    };
+  }
+
+  if (amountCents <= 0) {
+    return { ok: false, error: "Amount must be greater than zero." };
+  }
+
+  const memberCheck = await assertMembersOfGroup(supabase, groupId, [
+    paidBy,
+    ...participantIds,
+  ]);
+  if (!memberCheck.ok) {
+    return { ok: false, error: memberCheck.error };
+  }
+
+  let participants: ParticipantInput[];
+  try {
+    participants = parseParticipants(formData, splitType, participantIds);
+  } catch (err) {
+    if (err instanceof SplitValidationError || err instanceof MoneyParseError) {
+      return { ok: false, error: err.message };
+    }
+    throw err;
+  }
+
+  let splits;
+  try {
+    splits = calculateSplits(0, splitType, participants, {
+      totalAmountCents: amountCents,
+    });
+  } catch (err) {
+    if (err instanceof SplitValidationError) {
+      return { ok: false, error: err.message };
+    }
+    throw err;
+  }
+
+  return {
+    ok: true,
+    title,
+    description,
+    amount: centsToDollars(amountCents),
+    currency,
+    paidBy,
+    splitType,
+    expenseDate: expenseDate || new Date().toISOString().split("T")[0],
+    splits,
+  };
+}
+
 export async function createExpense(groupId: string, formData: FormData) {
   const user = await getAuthUser();
 
@@ -78,110 +201,107 @@ export async function createExpense(groupId: string, formData: FormData) {
     return { error: membership.error };
   }
 
-  const title = String(formData.get("title") ?? "").trim();
-  const description = String(formData.get("description") ?? "").trim() || null;
-  const amountRaw = String(formData.get("amount") ?? "");
-  const paidBy = String(formData.get("paid_by") ?? "");
-  const splitType = String(formData.get("split_type") ?? "equal") as SplitType;
-  const expenseDate = String(formData.get("expense_date") ?? "");
-  const currency = String(formData.get("currency") ?? "NZD");
-  const participantIds = Array.from(
-    new Set(formData.getAll("participant_ids").map(String).filter(Boolean))
-  );
+  const parsed = await parseExpenseForm(formData, supabase, groupId);
+  if (!parsed.ok) return { error: parsed.error };
 
-  if (!title) return { error: "Title is required." };
-  if (!paidBy) return { error: "Select who paid." };
-  if (!["equal", "exact", "percentage"].includes(splitType)) {
-    return { error: "Invalid split type." };
-  }
-  if (participantIds.length === 0) {
-    return { error: "Select at least one participant." };
-  }
+  const { data: expenseId, error } = await supabase.rpc("create_expense_atomic", {
+    p_group_id: groupId,
+    p_paid_by: parsed.paidBy,
+    p_created_by: user.id,
+    p_title: parsed.title,
+    p_description: parsed.description,
+    p_amount: parsed.amount,
+    p_currency: parsed.currency,
+    p_split_type: parsed.splitType,
+    p_expense_date: parsed.expenseDate,
+    p_participants: participantPayload(parsed.splits),
+  });
 
-  let amountCents: number;
-  try {
-    amountCents = parseMoneyToCents(amountRaw);
-  } catch (err) {
-    return {
-      error:
-        err instanceof MoneyParseError ? err.message : "Enter a valid amount.",
-    };
+  if (!error && expenseId) {
+    revalidatePath(`/groups/${groupId}`);
+    redirect(`/groups/${groupId}`);
   }
 
-  if (amountCents <= 0) {
-    return { error: "Amount must be greater than zero." };
+  if (error && !isRpcMissing(error)) {
+    const { userMessage } = userFacingActionError(
+      "create_expense_failed",
+      error,
+      "Could not create expense."
+    );
+    return { error: userMessage };
   }
 
-  const memberCheck = await assertMembersOfGroup(supabase, groupId, [
-    paidBy,
-    ...participantIds,
-  ]);
-  if (!memberCheck.ok) {
-    return { error: memberCheck.error };
+  // Pre-migration fallback — best-effort compensating delete (not fully atomic).
+  return createExpenseLegacy(supabase, {
+    groupId,
+    userId: user.id,
+    ...parsed,
+  });
+}
+
+async function createExpenseLegacy(
+  supabase: SupabaseClient,
+  args: {
+    groupId: string;
+    userId: string;
+    title: string;
+    description: string | null;
+    amount: number;
+    currency: string;
+    paidBy: string;
+    splitType: SplitType;
+    expenseDate: string;
+    splits: SplitRow[];
   }
-
-  let participants: ParticipantInput[];
-  try {
-    participants = parseParticipants(formData, splitType, participantIds);
-  } catch (err) {
-    if (err instanceof SplitValidationError || err instanceof MoneyParseError) {
-      return { error: err.message };
-    }
-    throw err;
-  }
-
-  let splits;
-  try {
-    splits = calculateSplits(0, splitType, participants, {
-      totalAmountCents: amountCents,
-    });
-  } catch (err) {
-    if (err instanceof SplitValidationError) {
-      return { error: err.message };
-    }
-    throw err;
-  }
-
-  const amount = centsToDollars(amountCents);
-
+) {
   const { data: expense, error } = await supabase
     .from("expenses")
     .insert({
-      group_id: groupId,
-      paid_by: paidBy,
-      created_by: user.id,
-      title,
-      description,
-      amount,
-      currency,
-      split_type: splitType,
-      expense_date: expenseDate || new Date().toISOString().split("T")[0],
+      group_id: args.groupId,
+      paid_by: args.paidBy,
+      created_by: args.userId,
+      title: args.title,
+      description: args.description,
+      amount: args.amount,
+      currency: args.currency,
+      split_type: args.splitType,
+      expense_date: args.expenseDate,
     })
     .select("id")
     .single();
 
   if (error || !expense) {
-    return { error: error?.message ?? "Failed to create expense." };
+    const { userMessage } = userFacingActionError(
+      "create_expense_legacy_failed",
+      error,
+      "Could not create expense."
+    );
+    return { error: userMessage };
   }
-
-  const participantRows = splits.map((split) => ({
-    expense_id: expense.id,
-    user_id: split.userId,
-    share_amount: split.shareAmount,
-    share_percentage: split.sharePercentage,
-  }));
 
   const { error: participantError } = await supabase
     .from("expense_participants")
-    .insert(participantRows);
+    .insert(
+      args.splits.map((split) => ({
+        expense_id: expense.id,
+        user_id: split.userId,
+        share_amount: split.shareAmount,
+        share_percentage: split.sharePercentage,
+      }))
+    );
 
   if (participantError) {
     await supabase.from("expenses").delete().eq("id", expense.id);
-    return { error: participantError.message };
+    const { userMessage } = userFacingActionError(
+      "create_expense_participants_failed",
+      participantError,
+      "Could not create expense."
+    );
+    return { error: userMessage };
   }
 
-  revalidatePath(`/groups/${groupId}`);
-  redirect(`/groups/${groupId}`);
+  revalidatePath(`/groups/${args.groupId}`);
+  redirect(`/groups/${args.groupId}`);
 }
 
 export async function updateExpense(
@@ -201,93 +321,78 @@ export async function updateExpense(
     return { error: membership.error };
   }
 
-  const title = String(formData.get("title") ?? "").trim();
-  const description = String(formData.get("description") ?? "").trim() || null;
-  const amountRaw = String(formData.get("amount") ?? "");
-  const paidBy = String(formData.get("paid_by") ?? "");
-  const splitType = String(formData.get("split_type") ?? "equal") as SplitType;
-  const expenseDate = String(formData.get("expense_date") ?? "");
-  const participantIds = Array.from(
-    new Set(formData.getAll("participant_ids").map(String).filter(Boolean))
-  );
+  const parsed = await parseExpenseForm(formData, supabase, groupId);
+  if (!parsed.ok) return { error: parsed.error };
 
-  if (!title) return { error: "Title is required." };
-  if (!paidBy) return { error: "Select who paid." };
-  if (participantIds.length === 0) {
-    return { error: "Select at least one participant." };
+  const { error } = await supabase.rpc("update_expense_atomic", {
+    p_expense_id: expenseId,
+    p_group_id: groupId,
+    p_paid_by: parsed.paidBy,
+    p_title: parsed.title,
+    p_description: parsed.description,
+    p_amount: parsed.amount,
+    p_split_type: parsed.splitType,
+    p_expense_date: parsed.expenseDate,
+    p_participants: participantPayload(parsed.splits),
+  });
+
+  if (!error) {
+    revalidatePath(`/groups/${groupId}`);
+    revalidatePath(`/groups/${groupId}/expenses/${expenseId}`);
+    return { success: true };
   }
 
-  let amountCents: number;
-  try {
-    amountCents = parseMoneyToCents(amountRaw);
-  } catch (err) {
-    return {
-      error:
-        err instanceof MoneyParseError ? err.message : "Enter a valid amount.",
-    };
+  if (!isRpcMissing(error)) {
+    const { userMessage } = userFacingActionError(
+      "update_expense_failed",
+      error,
+      "Could not update expense."
+    );
+    return { error: userMessage };
   }
 
-  const memberCheck = await assertMembersOfGroup(supabase, groupId, [
-    paidBy,
-    ...participantIds,
-  ]);
-  if (!memberCheck.ok) {
-    return { error: memberCheck.error };
-  }
-
-  let participants: ParticipantInput[];
-  try {
-    participants = parseParticipants(formData, splitType, participantIds);
-  } catch (err) {
-    if (err instanceof SplitValidationError || err instanceof MoneyParseError) {
-      return { error: err.message };
-    }
-    throw err;
-  }
-
-  let splits;
-  try {
-    splits = calculateSplits(0, splitType, participants, {
-      totalAmountCents: amountCents,
-    });
-  } catch (err) {
-    if (err instanceof SplitValidationError) {
-      return { error: err.message };
-    }
-    throw err;
-  }
-
-  const { error } = await supabase
+  // Pre-migration: non-atomic — prefer RPC in production.
+  const { error: updateError } = await supabase
     .from("expenses")
     .update({
-      title,
-      description,
-      amount: centsToDollars(amountCents),
-      paid_by: paidBy,
-      split_type: splitType,
-      expense_date: expenseDate,
+      title: parsed.title,
+      description: parsed.description,
+      amount: parsed.amount,
+      paid_by: parsed.paidBy,
+      split_type: parsed.splitType,
+      expense_date: parsed.expenseDate,
     })
     .eq("id", expenseId);
 
-  if (error) {
-    return { error: error.message };
+  if (updateError) {
+    const { userMessage } = userFacingActionError(
+      "update_expense_legacy_failed",
+      updateError,
+      "Could not update expense."
+    );
+    return { error: userMessage };
   }
 
   await supabase.from("expense_participants").delete().eq("expense_id", expenseId);
 
-  const participantRows = splits.map((split) => ({
-    expense_id: expenseId,
-    user_id: split.userId,
-    share_amount: split.shareAmount,
-    share_percentage: split.sharePercentage,
-  }));
-
   const { error: participantError } = await supabase
     .from("expense_participants")
-    .insert(participantRows);
+    .insert(
+      parsed.splits.map((split) => ({
+        expense_id: expenseId,
+        user_id: split.userId,
+        share_amount: split.shareAmount,
+        share_percentage: split.sharePercentage,
+      }))
+    );
 
   if (participantError) {
-    return { error: participantError.message };
+    const { userMessage } = userFacingActionError(
+      "update_expense_participants_failed",
+      participantError,
+      "Could not update expense splits. Please retry."
+    );
+    return { error: userMessage };
   }
 
   revalidatePath(`/groups/${groupId}`);
@@ -310,7 +415,12 @@ export async function deleteExpense(expenseId: string, groupId: string) {
   const { error } = await supabase.from("expenses").delete().eq("id", expenseId);
 
   if (error) {
-    return { error: error.message };
+    const { userMessage } = userFacingActionError(
+      "delete_expense_failed",
+      error,
+      "Could not delete expense."
+    );
+    return { error: userMessage };
   }
 
   revalidatePath(`/groups/${groupId}`);

@@ -35,11 +35,70 @@ export interface CalculateSplitsOptions {
   totalAmountCents?: number;
 }
 
+/** Sort by immutable user id so UI order cannot change money outcomes. */
+export function sortParticipantsByUserId<T extends { userId: string }>(
+  participants: T[]
+): T[] {
+  return [...participants].sort((a, b) => a.userId.localeCompare(b.userId));
+}
+
+/**
+ * Allocate centipercent units that sum exactly to 10000 (100.00%).
+ * Remainder units go to the first N entries in the provided order
+ * (callers should pass userIds sorted immutably).
+ */
+export function allocateEqualCentipercent(count: number): number[] {
+  if (count <= 0) return [];
+  const base = Math.floor(CENTIPERCENT_TOTAL / count);
+  const remainder = CENTIPERCENT_TOTAL % count;
+  return Array.from({ length: count }, (_, index) =>
+    base + (index < remainder ? 1 : 0)
+  );
+}
+
+/**
+ * Build a percentage map for selected member ids totaling exactly 100.00%.
+ * Keys are user ids; allocation order is sorted user id.
+ */
+export function equalPercentageState(
+  selectedUserIds: string[]
+): Record<string, string> {
+  const sorted = [...selectedUserIds].sort((a, b) => a.localeCompare(b));
+  const units = allocateEqualCentipercent(sorted.length);
+  const state: Record<string, string> = {};
+  sorted.forEach((userId, index) => {
+    state[userId] = (units[index]! / 100).toFixed(2);
+  });
+  return state;
+}
+
+/**
+ * Distribute leftover integer units (cents or centipercent) to the first
+ * `remainder` participants in already-sorted order.
+ */
+export function distributeRemainderUnits(
+  baseShares: number[],
+  total: number
+): number[] {
+  const allocated = sumCents(baseShares);
+  let leftover = total - allocated;
+  if (leftover < 0) {
+    throw new SplitValidationError("Internal split allocation underflow.");
+  }
+  return baseShares.map((share) => {
+    if (leftover > 0) {
+      leftover -= 1;
+      return share + 1;
+    }
+    return share;
+  });
+}
+
 /**
  * Calculate participant shares.
  *
- * Remainder policy (preserved from MVP): leftover cents from equal/percentage
- * splits are assigned to the **last** participant in the provided order.
+ * Remainder policy: sort by immutable user id, then give leftover cents to
+ * the first N participants in that sorted order (not form/UI order).
  */
 export function calculateSplits(
   totalAmount: number,
@@ -91,28 +150,28 @@ function calculateEqualSplit(
   totalCents: number,
   participants: SplitInput[]
 ): SplitResult[] {
-  const count = participants.length;
+  const ordered = sortParticipantsByUserId(participants);
+  const count = ordered.length;
   const baseShare = Math.floor(totalCents / count);
-  let allocated = 0;
+  const baseShares = Array.from({ length: count }, () => baseShare);
+  const shares = distributeRemainderUnits(baseShares, totalCents);
+  const percentages = allocateEqualCentipercent(count);
 
-  return participants.map((participant, index) => {
-    const isLast = index === count - 1;
-    const shareAmountCents = isLast ? totalCents - allocated : baseShare;
-    allocated += shareAmountCents;
-
-    return toResult(
+  return ordered.map((participant, index) =>
+    toResult(
       participant.userId,
-      shareAmountCents,
-      Math.round((10000 / count)) / 100
-    );
-  });
+      shares[index]!,
+      percentages[index]! / 100
+    )
+  );
 }
 
 function calculateExactSplit(
   totalCents: number,
   participants: SplitInput[]
 ): SplitResult[] {
-  const results = participants.map((participant) => {
+  const ordered = sortParticipantsByUserId(participants);
+  const results = ordered.map((participant) => {
     let cents = participant.exactAmountCents;
     if (cents == null && participant.exactAmount != null) {
       cents = dollarsToCents(participant.exactAmount);
@@ -140,12 +199,18 @@ function calculatePercentageSplit(
   totalCents: number,
   participants: SplitInput[]
 ): SplitResult[] {
-  const percentages = participants.map((participant) => {
+  const ordered = sortParticipantsByUserId(participants);
+
+  const percentages = ordered.map((participant) => {
     let centipercent = participant.percentageCentipercent;
     if (centipercent == null && participant.percentage != null) {
       centipercent = Math.round(participant.percentage * 100);
     }
-    if (centipercent == null || !Number.isInteger(centipercent) || centipercent < 0) {
+    if (
+      centipercent == null ||
+      !Number.isInteger(centipercent) ||
+      centipercent < 0
+    ) {
       throw new SplitValidationError(
         "Each participant needs a valid percentage."
       );
@@ -160,22 +225,16 @@ function calculatePercentageSplit(
     );
   }
 
-  let allocated = 0;
-  const count = participants.length;
+  const baseShares = percentages.map((centipercent) =>
+    Math.floor((totalCents * centipercent) / CENTIPERCENT_TOTAL)
+  );
+  const shares = distributeRemainderUnits(baseShares, totalCents);
 
-  return participants.map((participant, index) => {
-    const centipercent = percentages[index]!;
-    const isLast = index === count - 1;
-    const shareAmountCents = isLast
-      ? totalCents - allocated
-      : Math.floor((totalCents * centipercent) / CENTIPERCENT_TOTAL);
-
-    allocated += shareAmountCents;
-
-    return toResult(
+  return ordered.map((participant, index) =>
+    toResult(
       participant.userId,
-      shareAmountCents,
-      centipercent / 100
-    );
-  });
+      shares[index]!,
+      percentages[index]! / 100
+    )
+  );
 }

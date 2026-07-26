@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { isRedirectError } from "next/dist/client/components/redirect-error";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { createExpense } from "@/actions/expenses";
+import { equalPercentageState } from "@/lib/splits/calculator";
 import type { GroupMember, SplitType } from "@/lib/types/database";
 import { toast } from "sonner";
 
@@ -22,21 +23,22 @@ export function ExpenseForm({ groupId, members }: ExpenseFormProps) {
   const [selectedMembers, setSelectedMembers] = useState<string[]>(
     members.map((m) => m.user_id)
   );
+  const [percentages, setPercentages] = useState<Record<string, string>>(() =>
+    equalPercentageState(members.map((m) => m.user_id))
+  );
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const submittingRef = useRef(false);
 
-  const equalPercentageDefault = useMemo(() => {
-    if (selectedMembers.length === 0) return "0";
-    return (100 / selectedMembers.length).toFixed(2);
-  }, [selectedMembers.length]);
-
   function toggleMember(userId: string) {
-    setSelectedMembers((prev) =>
-      prev.includes(userId)
+    setSelectedMembers((prev) => {
+      const next = prev.includes(userId)
         ? prev.filter((id) => id !== userId)
-        : [...prev, userId]
-    );
+        : [...prev, userId];
+      // Controlled percentages always re-total to exactly 100.00 on selection change.
+      setPercentages(equalPercentageState(next));
+      return next;
+    });
   }
 
   function handleSubmit(formData: FormData) {
@@ -47,6 +49,12 @@ export function ExpenseForm({ groupId, members }: ExpenseFormProps) {
     selectedMembers.forEach((id) => formData.append("participant_ids", id));
     formData.set("split_type", splitType);
     formData.set("paid_by", paidBy);
+
+    if (splitType === "percentage") {
+      selectedMembers.forEach((id) => {
+        formData.set(`pct_${id}`, percentages[id] ?? "0");
+      });
+    }
 
     startTransition(async () => {
       try {
@@ -72,6 +80,7 @@ export function ExpenseForm({ groupId, members }: ExpenseFormProps) {
       action={handleSubmit}
       className="space-y-6"
       aria-busy={pending}
+      data-testid="expense-form"
       onSubmit={(event) => {
         if (submittingRef.current || pending) {
           event.preventDefault();
@@ -182,6 +191,7 @@ export function ExpenseForm({ groupId, members }: ExpenseFormProps) {
                     onChange={() => toggleMember(member.user_id)}
                     className="rounded"
                     disabled={pending}
+                    aria-label={`Include ${name}`}
                   />
                   <span className="text-sm">{name}</span>
                 </label>
@@ -208,9 +218,16 @@ export function ExpenseForm({ groupId, members }: ExpenseFormProps) {
                     max="100"
                     placeholder="%"
                     className="w-24"
-                    defaultValue={equalPercentageDefault}
+                    value={percentages[member.user_id] ?? ""}
+                    onChange={(e) =>
+                      setPercentages((prev) => ({
+                        ...prev,
+                        [member.user_id]: e.target.value,
+                      }))
+                    }
                     required
                     disabled={pending}
+                    aria-label={`Percentage for ${name}`}
                   />
                 )}
               </div>

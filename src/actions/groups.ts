@@ -8,6 +8,7 @@ import {
   canPerformOwnerAction,
   requireGroupAdmin,
 } from "@/lib/auth/membership";
+import { userFacingActionError } from "@/lib/logging/safe-error";
 import { randomBytes } from "crypto";
 
 function isUniqueViolation(error: { code?: string; message?: string } | null) {
@@ -225,19 +226,39 @@ export async function createInvite(groupId: string, email?: string) {
     .single();
 
   if (error || !data) {
-    // Surface the exact constraint/RLS failure for debugging without tokens.
-    const code = error?.code ? ` (${error.code})` : "";
-    return {
-      error: error?.message
-        ? `${error.message}${code}`
-        : "Failed to create invite.",
-    };
+    const { userMessage } = userFacingActionError(
+      "create_invite_failed",
+      error,
+      "Could not create invite. Please try again."
+    );
+    return { error: userMessage };
   }
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const inviteUrl = `${appUrl}/invite/${data.invite_token}`;
 
   return { success: true, inviteUrl };
+}
+
+function mapAcceptInviteError(message: string): string {
+  const lower = message.toLowerCase();
+  if (lower.includes("expired")) {
+    return "This invite has expired.";
+  }
+  if (lower.includes("email mismatch")) {
+    return "This invite is for a different email address. Sign in with that email to join.";
+  }
+  if (lower.includes("not authenticated")) {
+    return "Sign in to accept this invite.";
+  }
+  if (
+    lower.includes("not found") ||
+    lower.includes("already used") ||
+    lower.includes("invite")
+  ) {
+    return "Invite not found, expired, or already used.";
+  }
+  return "Could not accept invite. Please try again.";
 }
 
 export async function acceptInvite(token: string) {
@@ -250,18 +271,33 @@ export async function acceptInvite(token: string) {
   await ensureProfile(user!);
   const supabase = await createClient();
 
-  const { data: invite, error } = await supabase
+  const { data: groupId, error } = await supabase.rpc("accept_invite", {
+    p_token: token,
+  });
+
+  if (!error && groupId) {
+    revalidatePath(`/groups/${groupId}`);
+    redirect(`/groups/${groupId}`);
+  }
+
+  const rpcMissing =
+    error?.code === "PGRST202" ||
+    /accept_invite|could not find the function/i.test(error?.message ?? "");
+
+  if (error && !rpcMissing) {
+    return { error: mapAcceptInviteError(error.message) };
+  }
+
+  // Pre-migration fallback only. After 003, direct membership insert is denied
+  // for non-creators — deploy migration before relying on invites in production.
+  const { data: invite, error: inviteError } = await supabase
     .from("invites")
     .select("*")
     .eq("invite_token", token)
     .is("accepted_by", null)
     .maybeSingle();
 
-  if (error) {
-    return { error: `Unable to load invite: ${error.message}` };
-  }
-
-  if (!invite) {
+  if (inviteError || !invite) {
     return { error: "Invite not found, expired, or already used." };
   }
 
@@ -273,43 +309,14 @@ export async function acceptInvite(token: string) {
     const signedInEmail = user!.email?.toLowerCase();
     if (!signedInEmail || signedInEmail !== invite.email.toLowerCase()) {
       return {
-        error: `This invite is for ${invite.email}. Sign in with that email to join.`,
+        error:
+          "This invite is for a different email address. Sign in with that email to join.",
       };
     }
   }
 
-  const { data: existingMember } = await supabase
-    .from("group_members")
-    .select("id")
-    .eq("group_id", invite.group_id)
-    .eq("user_id", user!.id)
-    .maybeSingle();
-
-  if (!existingMember) {
-    const { error: memberError } = await supabase.from("group_members").insert({
-      group_id: invite.group_id,
-      user_id: user!.id,
-      role: "member",
-    });
-
-    if (memberError && !isUniqueViolation(memberError)) {
-      return { error: memberError.message };
-    }
-  }
-
-  const { error: acceptError } = await supabase
-    .from("invites")
-    .update({ accepted_by: user!.id })
-    .eq("id", invite.id)
-    .is("accepted_by", null);
-
-  if (acceptError) {
-    // Already a member is still a success path for join UX.
-    if (!existingMember) {
-      return { error: acceptError.message };
-    }
-  }
-
-  revalidatePath(`/groups/${invite.group_id}`);
-  redirect(`/groups/${invite.group_id}`);
+  return {
+    error:
+      "Invite acceptance requires database migration 003 (accept_invite). Ask an admin to apply it.",
+  };
 }

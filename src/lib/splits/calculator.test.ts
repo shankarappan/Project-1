@@ -1,17 +1,64 @@
 import { describe, expect, it } from "vitest";
-import { calculateSplits, SplitValidationError } from "./calculator";
+import {
+  allocateEqualCentipercent,
+  calculateSplits,
+  equalPercentageState,
+  SplitValidationError,
+} from "./calculator";
 import { sumCents } from "@/lib/money/cents";
 
+describe("allocateEqualCentipercent", () => {
+  it("totals exactly 100.00 for 3 participants", () => {
+    expect(allocateEqualCentipercent(3)).toEqual([3334, 3333, 3333]);
+    expect(sumCents(allocateEqualCentipercent(3))).toBe(10000);
+  });
+
+  it("builds controlled percentage state keyed by sorted user id", () => {
+    const state = equalPercentageState(["c", "a", "b"]);
+    expect(state).toEqual({
+      a: "33.34",
+      b: "33.33",
+      c: "33.33",
+    });
+    const total = Object.values(state).reduce(
+      (sum, value) => sum + Math.round(Number(value) * 100),
+      0
+    );
+    expect(total).toBe(10000);
+  });
+});
+
 describe("calculateSplits", () => {
-  it("splits $100 equally across 3 with conserved cents", () => {
+  it("splits $100 equally by sorted user id (not form order)", () => {
+    // Form order c,a,b — remainder must follow sorted a,b,c
     const splits = calculateSplits(100, "equal", [
+      { userId: "c" },
+      { userId: "a" },
+      { userId: "b" },
+    ]);
+
+    expect(splits.map((s) => s.userId)).toEqual(["a", "b", "c"]);
+    expect(splits.map((s) => s.shareAmountCents)).toEqual([3334, 3333, 3333]);
+    expect(sumCents(splits.map((s) => s.shareAmountCents))).toBe(10000);
+    expect(
+      sumCents(splits.map((s) => Math.round((s.sharePercentage ?? 0) * 100)))
+    ).toBe(10000);
+  });
+
+  it("ignores form order for equal remainder", () => {
+    const forward = calculateSplits(100, "equal", [
       { userId: "a" },
       { userId: "b" },
       { userId: "c" },
     ]);
-
-    expect(splits.map((s) => s.shareAmountCents)).toEqual([3333, 3333, 3334]);
-    expect(sumCents(splits.map((s) => s.shareAmountCents))).toBe(10000);
+    const reversed = calculateSplits(100, "equal", [
+      { userId: "c" },
+      { userId: "b" },
+      { userId: "a" },
+    ]);
+    expect(forward.map((s) => s.shareAmountCents)).toEqual(
+      reversed.map((s) => s.shareAmountCents)
+    );
   });
 
   it("validates exact totals", () => {
@@ -29,7 +76,7 @@ describe("calculateSplits", () => {
     expect(sumCents(ok.map((s) => s.shareAmountCents))).toBe(1000);
   });
 
-  it("validates percentages and assigns remainder to last", () => {
+  it("validates percentages and conserves cents by sorted user id", () => {
     expect(() =>
       calculateSplits(100, "percentage", [
         { userId: "a", percentageCentipercent: 5000 },
@@ -38,10 +85,11 @@ describe("calculateSplits", () => {
     ).toThrow(/100%/);
 
     const splits = calculateSplits(100, "percentage", [
+      { userId: "c", percentageCentipercent: 3334 },
       { userId: "a", percentageCentipercent: 3333 },
       { userId: "b", percentageCentipercent: 3333 },
-      { userId: "c", percentageCentipercent: 3334 },
     ]);
+    expect(splits.map((s) => s.userId)).toEqual(["a", "b", "c"]);
     expect(sumCents(splits.map((s) => s.shareAmountCents))).toBe(10000);
   });
 

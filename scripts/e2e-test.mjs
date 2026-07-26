@@ -242,7 +242,57 @@ async function testUnauthorizedAccess(outsiderClient, groupId) {
   ok("Unauthorized access denied for outsider");
 }
 
-async function testInviteFlows(adminClient, memberClient, groupId) {
+async function testMaliciousMembership(outsiderClient, memberClient, groupId) {
+  // Self-join without invite
+  const { error: selfJoinError } = await outsiderClient
+    .from("group_members")
+    .insert({
+      group_id: groupId,
+      user_id: ids.outsiderUserId,
+      role: "member",
+    });
+  if (!selfJoinError) {
+    fail("Malicious self-join without invite", "insert succeeded");
+  } else {
+    ok("Malicious self-join without invite denied");
+  }
+
+  // Member adding another user (after they joined via RPC)
+  const { error: addOtherError } = await memberClient.from("group_members").insert({
+    group_id: groupId,
+    user_id: ids.outsiderUserId,
+    role: "member",
+  });
+  if (!addOtherError) {
+    fail("Malicious member-add-other", "insert succeeded");
+  } else {
+    ok("Malicious member-add-other denied");
+  }
+
+  // Self-promotion to admin
+  const { error: promoteError } = await memberClient
+    .from("group_members")
+    .update({ role: "admin" })
+    .eq("group_id", groupId)
+    .eq("user_id", ids.memberUserId);
+  if (!promoteError) {
+    const { data: row } = await admin
+      .from("group_members")
+      .select("role")
+      .eq("group_id", groupId)
+      .eq("user_id", ids.memberUserId)
+      .maybeSingle();
+    if (row?.role === "admin") {
+      fail("Malicious self-promotion", "role became admin");
+    } else {
+      ok("Malicious self-promotion denied (no-op / blocked)");
+    }
+  } else {
+    ok("Malicious self-promotion denied");
+  }
+}
+
+async function testInviteFlows(adminClient, memberClient, outsiderClient, groupId) {
   const token = randomBytes(16).toString("hex");
   const { data: invite, error } = await adminClient
     .from("invites")
@@ -261,49 +311,28 @@ async function testInviteFlows(adminClient, memberClient, groupId) {
   }
   ok("Admin invite success");
 
-  // Ordinary member should be denied by RLS after migration 003
+  // Join via accept_invite RPC (not direct group_members insert)
+  const { data: joinedGroupId, error: joinError } = await memberClient.rpc(
+    "accept_invite",
+    { p_token: token }
+  );
+  if (joinError || joinedGroupId !== groupId) {
+    fail("Invite/join via accept_invite RPC", joinError?.message ?? "no group id");
+  } else {
+    ok("Invite/join via accept_invite RPC");
+  }
+
+  // Ordinary member should be denied creating invites
   const { error: memberInviteError } = await memberClient.from("invites").insert({
     group_id: groupId,
     invite_token: randomBytes(16).toString("hex"),
     created_by: ids.memberUserId,
   });
-
   if (!memberInviteError) {
-    // Member may not even be in the group yet — add them and retry denial
-    await adminClient.from("group_members").upsert(
-      { group_id: groupId, user_id: ids.memberUserId, role: "member" },
-      { onConflict: "group_id,user_id" }
-    );
-    const { error: retryError } = await memberClient.from("invites").insert({
-      group_id: groupId,
-      invite_token: randomBytes(16).toString("hex"),
-      created_by: ids.memberUserId,
-    });
-    if (!retryError) {
-      fail("Ordinary-member invite denial", "member was able to create invite");
-    } else {
-      ok("Ordinary-member invite denial");
-    }
+    fail("Ordinary-member invite denial", "member was able to create invite");
   } else {
     ok("Ordinary-member invite denial");
   }
-
-  // Join via invite as outsider
-  const { error: joinError } = await memberClient.from("group_members").insert({
-    group_id: groupId,
-    user_id: ids.memberUserId,
-    role: "member",
-  });
-  if (joinError && joinError.code !== "23505") {
-    fail("Invite/join", joinError.message);
-  } else {
-    ok("Invite/join");
-  }
-
-  await adminClient
-    .from("invites")
-    .update({ accepted_by: ids.memberUserId })
-    .eq("invite_token", token);
 
   // Duplicate invite token
   const { error: dupError } = await adminClient.from("invites").insert({
@@ -317,7 +346,7 @@ async function testInviteFlows(adminClient, memberClient, groupId) {
     ok("Duplicate invite rejected");
   }
 
-  // Expired invite cannot be "open"
+  // Expired invite rejected by RPC
   const expiredToken = randomBytes(16).toString("hex");
   await adminClient.from("invites").insert({
     group_id: groupId,
@@ -325,25 +354,26 @@ async function testInviteFlows(adminClient, memberClient, groupId) {
     created_by: ids.adminUserId,
     expires_at: new Date(Date.now() - 1000).toISOString(),
   });
-  const { data: expired } = await memberClient
-    .from("invites")
-    .select("*")
-    .eq("invite_token", expiredToken)
-    .is("accepted_by", null)
-    .maybeSingle();
-  if (expired && new Date(expired.expires_at) < new Date()) {
-    ok("Expired invite detectable by client");
-  } else if (!expired) {
-    ok("Expired/invalid invite not visible");
+  const { error: expiredError } = await outsiderClient.rpc("accept_invite", {
+    p_token: expiredToken,
+  });
+  if (!expiredError) {
+    fail("Expired invite", "accept_invite succeeded");
   } else {
-    fail("Expired invite", "unexpected state");
+    ok("Expired/invalid invite rejected by RPC");
   }
 
-  // Existing member re-join is idempotent
-  const { error: rejoinError } = await memberClient.from("group_members").upsert(
-    { group_id: groupId, user_id: ids.memberUserId, role: "member" },
-    { onConflict: "group_id,user_id" }
-  );
+  // Existing member re-accept is idempotent via RPC
+  const token2 = randomBytes(16).toString("hex");
+  await adminClient.from("invites").insert({
+    group_id: groupId,
+    invite_token: token2,
+    created_by: ids.adminUserId,
+    expires_at: new Date(Date.now() + 7 * 86400000).toISOString(),
+  });
+  const { error: rejoinError } = await memberClient.rpc("accept_invite", {
+    p_token: token2,
+  });
   if (rejoinError) {
     fail("Existing-member behaviour", rejoinError.message);
   } else {
@@ -468,7 +498,8 @@ async function main() {
     if (!ids.groupId) throw new Error("Group creation failed");
 
     await testUnauthorizedAccess(outsiderClient, ids.groupId);
-    await testInviteFlows(adminClient, memberClient, ids.groupId);
+    await testInviteFlows(adminClient, memberClient, outsiderClient, ids.groupId);
+    await testMaliciousMembership(outsiderClient, memberClient, ids.groupId);
     ids.expenseId = (await testExpense(adminClient, ids.groupId)) ?? "";
     await testDeleteExpense(adminClient, ids.expenseId);
     await testDeleteGroup(adminClient, ids.groupId);

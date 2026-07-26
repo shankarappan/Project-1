@@ -5,10 +5,11 @@ const ensureProfile = vi.fn();
 const requireGroupMember = vi.fn();
 const assertMembersOfGroup = vi.fn();
 const fromMock = vi.fn();
+const rpc = vi.fn();
 
 vi.mock("@/lib/supabase/cached", () => ({
   getAuthUser: () => getAuthUser(),
-  createClient: async () => ({ from: fromMock }),
+  createClient: async () => ({ from: fromMock, rpc }),
 }));
 
 vi.mock("@/lib/ensure-profile", () => ({
@@ -36,22 +37,22 @@ vi.mock("next/navigation", () => ({
   }),
 }));
 
-import { createExpense } from "./expenses";
+import { createExpense, updateExpense } from "./expenses";
 
 function chain(result: { data?: unknown; error?: unknown }) {
-  const api: Record<string, unknown> = {};
-  const self = new Proxy(api, {
-    get(_target, prop) {
-      if (prop === "then") {
-        return (resolve: (value: unknown) => unknown) =>
-          Promise.resolve(result).then(resolve);
-      }
-      if (prop === "single" || prop === "maybeSingle") {
-        return async () => result;
-      }
-      return () => self;
-    },
-  });
+  const self = {
+    select: () => self,
+    insert: () => self,
+    update: () => self,
+    delete: () => self,
+    eq: () => self,
+    single: async () => result,
+    maybeSingle: async () => result,
+    then: (
+      resolve: (value: { data?: unknown; error?: unknown }) => unknown,
+      reject?: (reason: unknown) => unknown
+    ) => Promise.resolve(result).then(resolve, reject),
+  };
   return self;
 }
 
@@ -62,6 +63,7 @@ describe("createExpense", () => {
     requireGroupMember.mockReset();
     assertMembersOfGroup.mockReset();
     fromMock.mockReset();
+    rpc.mockReset();
   });
 
   it("rejects non-members and non-member payers/participants", async () => {
@@ -91,22 +93,67 @@ describe("createExpense", () => {
     expect(badMembers.error).toMatch(/must be members/i);
   });
 
-  it("creates equal-split expenses with integer-cent shares", async () => {
+  it("creates via atomic RPC with sorted integer-cent shares", async () => {
     getAuthUser.mockResolvedValue({ id: "u1", email: "u@test.com" });
     requireGroupMember.mockResolvedValue({ ok: true, role: "admin" });
     assertMembersOfGroup.mockResolvedValue({ ok: true });
+    rpc.mockResolvedValue({ data: "e1", error: null });
 
-    let insertedParticipants: unknown;
+    const fd = new FormData();
+    fd.set("title", "Dinner");
+    fd.set("amount", "100.00");
+    fd.set("paid_by", "u1");
+    fd.set("split_type", "equal");
+    fd.append("participant_ids", "u3");
+    fd.append("participant_ids", "u1");
+    fd.append("participant_ids", "u2");
+
+    await expect(createExpense("g1", fd)).rejects.toThrow("REDIRECT:/groups/g1");
+    expect(rpc).toHaveBeenCalledWith(
+      "create_expense_atomic",
+      expect.objectContaining({
+        p_group_id: "g1",
+        p_participants: [
+          { user_id: "u1", share_amount: 33.34, share_percentage: "33.34" },
+          { user_id: "u2", share_amount: 33.33, share_percentage: "33.33" },
+          { user_id: "u3", share_amount: 33.33, share_percentage: "33.33" },
+        ],
+      })
+    );
+    expect(fromMock).not.toHaveBeenCalled();
+  });
+
+  it("rolls back orphan expense when legacy participant insert fails", async () => {
+    getAuthUser.mockResolvedValue({ id: "u1", email: "u@test.com" });
+    requireGroupMember.mockResolvedValue({ ok: true, role: "admin" });
+    assertMembersOfGroup.mockResolvedValue({ ok: true });
+    rpc.mockResolvedValue({
+      data: null,
+      error: { code: "PGRST202", message: "Could not find the function" },
+    });
+
+    const deleted: string[] = [];
     fromMock.mockImplementation((table: string) => {
       if (table === "expenses") {
-        return chain({ data: { id: "e1" }, error: null });
+        return {
+          insert: () => ({
+            select: () => ({
+              single: async () => ({ data: { id: "orphan-e1" }, error: null }),
+            }),
+          }),
+          delete: () => ({
+            eq: (_col: string, id: string) => {
+              deleted.push(id);
+              return Promise.resolve({ error: null });
+            },
+          }),
+        };
       }
       if (table === "expense_participants") {
         return {
-          insert: (rows: unknown) => {
-            insertedParticipants = rows;
-            return Promise.resolve({ error: null });
-          },
+          insert: async () => ({
+            error: { message: "FK boom", code: "23503" },
+          }),
         };
       }
       return chain({ data: null, error: null });
@@ -114,19 +161,15 @@ describe("createExpense", () => {
 
     const fd = new FormData();
     fd.set("title", "Dinner");
-    fd.set("amount", "100.00");
+    fd.set("amount", "10.00");
     fd.set("paid_by", "u1");
     fd.set("split_type", "equal");
     fd.append("participant_ids", "u1");
-    fd.append("participant_ids", "u2");
-    fd.append("participant_ids", "u3");
 
-    await expect(createExpense("g1", fd)).rejects.toThrow("REDIRECT:/groups/g1");
-    expect(insertedParticipants).toEqual([
-      { expense_id: "e1", user_id: "u1", share_amount: 33.33, share_percentage: 33.33 },
-      { expense_id: "e1", user_id: "u2", share_amount: 33.33, share_percentage: 33.33 },
-      { expense_id: "e1", user_id: "u3", share_amount: 33.34, share_percentage: 33.33 },
-    ]);
+    const result = await createExpense("g1", fd);
+    expect(result.error).toMatch(/could not create expense/i);
+    expect(result.error).not.toMatch(/FK boom|23503/);
+    expect(deleted).toContain("orphan-e1");
   });
 
   it("rejects exact splits that do not total the amount", async () => {
@@ -146,5 +189,28 @@ describe("createExpense", () => {
 
     const result = await createExpense("g1", fd);
     expect(result.error).toMatch(/must total/i);
+  });
+
+  it("updates via atomic RPC so participant replace is transactional", async () => {
+    getAuthUser.mockResolvedValue({ id: "u1", email: "u@test.com" });
+    requireGroupMember.mockResolvedValue({ ok: true, role: "admin" });
+    assertMembersOfGroup.mockResolvedValue({ ok: true });
+    rpc.mockResolvedValue({ data: "e1", error: null });
+
+    const fd = new FormData();
+    fd.set("title", "Dinner");
+    fd.set("amount", "20.00");
+    fd.set("paid_by", "u1");
+    fd.set("split_type", "equal");
+    fd.set("expense_date", "2026-01-01");
+    fd.append("participant_ids", "u1");
+    fd.append("participant_ids", "u2");
+
+    const result = await updateExpense("e1", "g1", fd);
+    expect(result.success).toBe(true);
+    expect(rpc).toHaveBeenCalledWith(
+      "update_expense_atomic",
+      expect.objectContaining({ p_expense_id: "e1", p_group_id: "g1" })
+    );
   });
 });
