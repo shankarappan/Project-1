@@ -32,6 +32,12 @@ function hasAtMostTwoDecimals(value: number): boolean {
   return Number.isFinite(value) && Math.round(value * 100) / 100 === value;
 }
 
+function sortByUserId(
+  participants: ExpenseParticipantPayload[]
+): ExpenseParticipantPayload[] {
+  return [...participants].sort((a, b) => a.user_id.localeCompare(b.user_id));
+}
+
 export function assertExpenseSplitPayload(input: ExpenseSplitPayload): void {
   if (!["equal", "exact", "percentage"].includes(input.splitType)) {
     throw new ExpenseInvariantError("Invalid split type");
@@ -118,20 +124,39 @@ export function assertExpenseSplitPayload(input: ExpenseSplitPayload): void {
   }
 
   if (input.splitType === "equal") {
-    const count = input.participants.length;
+    const ordered = sortByUserId(input.participants);
+    const count = ordered.length;
     const amountCents = Math.round(input.amount * 100);
     const base = Math.floor(amountCents / count);
     const rem = amountCents % count;
-    let high = 0;
-    let low = 0;
-    for (const participant of input.participants) {
-      const cents = Math.round(Number(participant.share_amount) * 100);
-      if (cents === base) low += 1;
-      else if (cents === base + 1) high += 1;
-      else throw new ExpenseInvariantError("Equal split shares are inconsistent");
+    for (let index = 0; index < ordered.length; index += 1) {
+      const cents = Math.round(Number(ordered[index]!.share_amount) * 100);
+      const expected = base + (index < rem ? 1 : 0);
+      if (cents !== expected) {
+        throw new ExpenseInvariantError("Equal split shares are inconsistent");
+      }
     }
-    if (high !== rem || high + low !== count) {
-      throw new ExpenseInvariantError("Equal split shares are inconsistent");
+  }
+
+  if (input.splitType === "percentage") {
+    const ordered = sortByUserId(input.participants);
+    const amountCents = Math.round(input.amount * 100);
+    const baseShares = ordered.map((participant) => {
+      const centipercent = Math.round(Number(participant.share_percentage) * 100);
+      return Math.floor((amountCents * centipercent) / 10000);
+    });
+    let leftover =
+      amountCents - baseShares.reduce((sum, share) => sum + share, 0);
+    for (let index = 0; index < ordered.length; index += 1) {
+      const cents = Math.round(Number(ordered[index]!.share_amount) * 100);
+      const expected =
+        baseShares[index]! + (leftover > 0 ? 1 : 0);
+      if (leftover > 0) leftover -= 1;
+      if (cents !== expected) {
+        throw new ExpenseInvariantError(
+          "Percentage shares do not match policy"
+        );
+      }
     }
   }
 }

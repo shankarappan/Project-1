@@ -27,6 +27,21 @@ describe("assertExpenseSplitPayload (malicious direct RPC)", () => {
     ).not.toThrow();
   });
 
+  it("rejects swapped equal remainders (wrong user_id gets +1 cent)", () => {
+    // Policy: remainder goes to first sorted user_id (u1), not u2.
+    expect(() =>
+      assertExpenseSplitPayload({
+        ...base,
+        splitType: "equal",
+        participants: [
+          { user_id: "u1", share_amount: 33.33 },
+          { user_id: "u2", share_amount: 33.34 },
+          { user_id: "u3", share_amount: 33.33 },
+        ],
+      })
+    ).toThrow(/equal split shares are inconsistent/i);
+  });
+
   it("rejects negative shares", () => {
     expect(() =>
       assertExpenseSplitPayload({
@@ -109,4 +124,54 @@ describe("assertExpenseSplitPayload (malicious direct RPC)", () => {
       })
     ).toThrow(/percentages must total 100/i);
   });
+
+  it("accepts percentage shares that match floor + sorted remainder policy", () => {
+    // 100.01 @ 50/50 → floor bases 50.00/50.00, leftover 1 cent → u1
+    expect(() =>
+      assertExpenseSplitPayload({
+        ...base,
+        amount: 100.01,
+        memberIds: ["u1", "u2"],
+        splitType: "percentage",
+        participants: [
+          { user_id: "u1", share_amount: 50.01, share_percentage: 50 },
+          { user_id: "u2", share_amount: 50, share_percentage: 50 },
+        ],
+      })
+    ).not.toThrow();
+  });
+
+  it("rejects percentage share/amount mismatches (wrong remainder assignee)", () => {
+    // Totals still sum to 100.01, but leftover cent assigned to u2 instead of u1.
+    expect(() =>
+      assertExpenseSplitPayload({
+        ...base,
+        amount: 100.01,
+        memberIds: ["u1", "u2"],
+        splitType: "percentage",
+        participants: [
+          { user_id: "u1", share_amount: 50, share_percentage: 50 },
+          { user_id: "u2", share_amount: 50.01, share_percentage: 50 },
+        ],
+      })
+    ).toThrow(/percentage shares do not match policy/i);
+  });
+
+  it("rejects percentage shares that ignore floor(total * centipercent / 10000)", () => {
+    // 50/50 of 100.00 → floor bases are 50.00/50.00; 49.99/50.01 still sums
+    // but does not match the deterministic floor policy.
+    expect(() =>
+      assertExpenseSplitPayload({
+        ...base,
+        amount: 100,
+        memberIds: ["u1", "u2"],
+        splitType: "percentage",
+        participants: [
+          { user_id: "u1", share_amount: 49.99, share_percentage: 50 },
+          { user_id: "u2", share_amount: 50.01, share_percentage: 50 },
+        ],
+      })
+    ).toThrow(/percentage shares do not match policy/i);
+  });
 });
+

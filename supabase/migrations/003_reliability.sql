@@ -227,8 +227,11 @@ declare
   v_share_cents bigint;
   v_base bigint;
   v_rem bigint;
-  v_high integer := 0;
-  v_low integer := 0;
+  v_expected bigint;
+  v_centipercent bigint;
+  v_sum_base bigint := 0;
+  v_leftover bigint;
+  v_idx integer := 0;
 begin
   if p_split_type is null or p_split_type not in ('equal', 'exact', 'percentage') then
     raise exception 'Invalid split type';
@@ -333,39 +336,71 @@ begin
     raise exception 'Percentages must total 100';
   end if;
 
-  -- Equal split: shares must be a deterministic equal division in cents
-  -- (each share is floor(total/n) or floor(total/n)+1; high-share count = remainder).
+  -- Equal split: +1 remainder cents go to the first rem participants in
+  -- sorted immutable user_id order (matches TypeScript calculator).
   if p_split_type = 'equal' then
     v_amount_cents := round(p_amount * 100)::bigint;
     v_base := v_amount_cents / v_count;
     v_rem := v_amount_cents % v_count;
+    v_idx := 0;
 
-    for v_participant in select * from jsonb_array_elements(p_participants)
+    for v_participant in
+      select *
+      from jsonb_array_elements(p_participants) e
+      order by (e->>'user_id')
     loop
+      v_idx := v_idx + 1;
       v_share_cents := round(((v_participant->>'share_amount')::numeric) * 100)::bigint;
-      if v_share_cents = v_base then
-        v_low := v_low + 1;
-      elsif v_share_cents = v_base + 1 then
-        v_high := v_high + 1;
-      else
+      v_expected := v_base + case when v_idx <= v_rem then 1 else 0 end;
+      if v_share_cents <> v_expected then
         raise exception 'Equal split shares are inconsistent';
       end if;
     end loop;
+  end if;
 
-    if v_high <> v_rem or (v_high + v_low) <> v_count then
-      raise exception 'Equal split shares are inconsistent';
-    end if;
+  -- Percentage split: each share_amount must equal
+  -- floor(total_cents * centipercent / 10000), then leftover cents distributed
+  -- to participants in sorted user_id order (matches TypeScript calculator).
+  if p_split_type = 'percentage' then
+    v_amount_cents := round(p_amount * 100)::bigint;
+    v_sum_base := 0;
+
+    for v_participant in select * from jsonb_array_elements(p_participants)
+    loop
+      v_centipercent := round(((v_participant->>'share_percentage')::numeric) * 100)::bigint;
+      v_sum_base := v_sum_base + (v_amount_cents * v_centipercent) / 10000;
+    end loop;
+
+    v_leftover := v_amount_cents - v_sum_base;
+    v_idx := 0;
+
+    for v_participant in
+      select *
+      from jsonb_array_elements(p_participants) e
+      order by (e->>'user_id')
+    loop
+      v_idx := v_idx + 1;
+      v_centipercent := round(((v_participant->>'share_percentage')::numeric) * 100)::bigint;
+      v_base := (v_amount_cents * v_centipercent) / 10000;
+      v_expected := v_base + case when v_idx <= v_leftover then 1 else 0 end;
+      v_share_cents := round(((v_participant->>'share_amount')::numeric) * 100)::bigint;
+      if v_share_cents <> v_expected then
+        raise exception 'Percentage shares do not match policy';
+      end if;
+    end loop;
   end if;
 end;
 $$;
 
+-- Internal helper: not callable by clients. Only the function owner (via
+-- wrapping SECURITY DEFINER RPCs create_expense_atomic / update_expense_atomic)
+-- may execute this.
 revoke all on function public.assert_expense_split_payload(
   uuid, uuid, text, numeric, text, jsonb
 ) from public;
--- Internal helper: executable by authenticated via the wrapping RPCs only.
-grant execute on function public.assert_expense_split_payload(
+revoke all on function public.assert_expense_split_payload(
   uuid, uuid, text, numeric, text, jsonb
-) to authenticated;
+) from authenticated;
 
 create or replace function public.create_expense_atomic(
   p_group_id uuid,

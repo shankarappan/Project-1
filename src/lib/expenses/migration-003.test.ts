@@ -34,11 +34,39 @@ describe("migration 003 expense RPC invariants (static)", () => {
       "Percentage cannot be negative",
       "Percentage must use at most 2 decimal places",
       "Equal split shares are inconsistent",
+      "Percentage shares do not match policy",
       "Payer and participants must be members of this group",
     ];
     for (const message of required) {
       expect(sql).toContain(message);
     }
+  });
+
+  it("keeps assert_expense_split_payload internal (no client EXECUTE)", () => {
+    expect(sql).toMatch(
+      /revoke all on function public\.assert_expense_split_payload\([\s\S]*?\) from public;/i
+    );
+    expect(sql).toMatch(
+      /revoke all on function public\.assert_expense_split_payload\([\s\S]*?\) from authenticated;/i
+    );
+    expect(sql).not.toMatch(
+      /grant execute on function public\.assert_expense_split_payload\([\s\S]*?\) to authenticated;/i
+    );
+  });
+
+  it("enforces deterministic remainder assignment by sorted user_id", () => {
+    expect(sql).toMatch(
+      /from jsonb_array_elements\(p_participants\) e\s+order by \(e->>'user_id'\)/i
+    );
+    expect(sql).toMatch(
+      /v_expected := v_base \+ case when v_idx <= v_rem then 1 else 0 end/i
+    );
+    expect(sql).toMatch(
+      /v_expected := v_base \+ case when v_idx <= v_leftover then 1 else 0 end/i
+    );
+    expect(sql).toMatch(
+      /\(v_amount_cents \* v_centipercent\) \/ 10000/i
+    );
   });
 
   it("documents migration-first rollout (app fails closed without RPCs)", () => {
@@ -49,3 +77,4 @@ describe("migration 003 expense RPC invariants (static)", () => {
     expect(sql).toMatch(/create_group_atomic/i);
   });
 });
+
