@@ -1,11 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState, useTransition } from "react";
+import { isRedirectError } from "next/dist/client/components/redirect-error";
+import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { createExpense } from "@/actions/expenses";
+import { equalPercentageState } from "@/lib/splits/calculator";
 import type { GroupMember, SplitType } from "@/lib/types/database";
 import { toast } from "sonner";
 
@@ -20,36 +23,80 @@ export function ExpenseForm({ groupId, members }: ExpenseFormProps) {
   const [selectedMembers, setSelectedMembers] = useState<string[]>(
     members.map((m) => m.user_id)
   );
-  const [loading, setLoading] = useState(false);
+  const [percentages, setPercentages] = useState<Record<string, string>>(() =>
+    equalPercentageState(members.map((m) => m.user_id))
+  );
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+  const submittingRef = useRef(false);
 
   function toggleMember(userId: string) {
-    setSelectedMembers((prev) =>
-      prev.includes(userId)
+    setSelectedMembers((prev) => {
+      const next = prev.includes(userId)
         ? prev.filter((id) => id !== userId)
-        : [...prev, userId]
-    );
+        : [...prev, userId];
+      // Controlled percentages always re-total to exactly 100.00 on selection change.
+      setPercentages(equalPercentageState(next));
+      return next;
+    });
   }
 
-  async function handleSubmit(formData: FormData) {
-    setLoading(true);
+  function handleSubmit(formData: FormData) {
+    if (submittingRef.current || pending) return;
+    submittingRef.current = true;
+    setError(null);
+
     selectedMembers.forEach((id) => formData.append("participant_ids", id));
     formData.set("split_type", splitType);
     formData.set("paid_by", paidBy);
 
-    const result = await createExpense(groupId, formData);
-    setLoading(false);
-
-    if (result?.error) {
-      toast.error(result.error);
+    if (splitType === "percentage") {
+      selectedMembers.forEach((id) => {
+        formData.set(`pct_${id}`, percentages[id] ?? "0");
+      });
     }
+
+    startTransition(async () => {
+      try {
+        const result = await createExpense(groupId, formData);
+        if (result?.error) {
+          setError(result.error);
+          toast.error(result.error);
+        }
+      } catch (err) {
+        if (isRedirectError(err)) throw err;
+        const message =
+          err instanceof Error ? err.message : "Failed to create expense.";
+        setError(message);
+        toast.error(message);
+      } finally {
+        submittingRef.current = false;
+      }
+    });
   }
 
   return (
-    <form action={handleSubmit} className="space-y-6">
+    <form
+      action={handleSubmit}
+      className="space-y-6"
+      aria-busy={pending}
+      data-testid="expense-form"
+      onSubmit={(event) => {
+        if (submittingRef.current || pending) {
+          event.preventDefault();
+        }
+      }}
+    >
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2 sm:col-span-2">
           <Label htmlFor="title">Title</Label>
-          <Input id="title" name="title" placeholder="Dinner, groceries, rent..." required />
+          <Input
+            id="title"
+            name="title"
+            placeholder="Dinner, groceries, rent..."
+            required
+            disabled={pending}
+          />
         </div>
 
         <div className="space-y-2">
@@ -62,6 +109,7 @@ export function ExpenseForm({ groupId, members }: ExpenseFormProps) {
             min="0.01"
             placeholder="0.00"
             required
+            disabled={pending}
           />
         </div>
 
@@ -73,6 +121,7 @@ export function ExpenseForm({ groupId, members }: ExpenseFormProps) {
             type="date"
             defaultValue={new Date().toISOString().split("T")[0]}
             required
+            disabled={pending}
           />
         </div>
 
@@ -84,6 +133,7 @@ export function ExpenseForm({ groupId, members }: ExpenseFormProps) {
             value={paidBy}
             onChange={(e) => setPaidBy(e.target.value)}
             required
+            disabled={pending}
             className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
           >
             <option value="" disabled>
@@ -99,7 +149,7 @@ export function ExpenseForm({ groupId, members }: ExpenseFormProps) {
 
         <div className="space-y-2 sm:col-span-2">
           <Label htmlFor="description">Description (optional)</Label>
-          <Textarea id="description" name="description" rows={2} />
+          <Textarea id="description" name="description" rows={2} disabled={pending} />
         </div>
       </div>
 
@@ -113,6 +163,7 @@ export function ExpenseForm({ groupId, members }: ExpenseFormProps) {
               variant={splitType === type ? "default" : "outline"}
               size="sm"
               onClick={() => setSplitType(type)}
+              disabled={pending}
             >
               {type}
             </Button>
@@ -139,6 +190,8 @@ export function ExpenseForm({ groupId, members }: ExpenseFormProps) {
                     checked={selected}
                     onChange={() => toggleMember(member.user_id)}
                     className="rounded"
+                    disabled={pending}
+                    aria-label={`Include ${name}`}
                   />
                   <span className="text-sm">{name}</span>
                 </label>
@@ -152,6 +205,7 @@ export function ExpenseForm({ groupId, members }: ExpenseFormProps) {
                     placeholder="0.00"
                     className="w-28"
                     required
+                    disabled={pending}
                   />
                 )}
 
@@ -164,8 +218,16 @@ export function ExpenseForm({ groupId, members }: ExpenseFormProps) {
                     max="100"
                     placeholder="%"
                     className="w-24"
-                    defaultValue={splitType === "percentage" ? (100 / members.length).toFixed(2) : undefined}
+                    value={percentages[member.user_id] ?? ""}
+                    onChange={(e) =>
+                      setPercentages((prev) => ({
+                        ...prev,
+                        [member.user_id]: e.target.value,
+                      }))
+                    }
                     required
+                    disabled={pending}
+                    aria-label={`Percentage for ${name}`}
                   />
                 )}
               </div>
@@ -176,8 +238,30 @@ export function ExpenseForm({ groupId, members }: ExpenseFormProps) {
 
       <input type="hidden" name="currency" value="NZD" />
 
-      <Button type="submit" disabled={loading || selectedMembers.length === 0} className="w-full">
-        {loading ? "Saving..." : "Add expense"}
+      {error && (
+        <p className="text-sm text-destructive" role="alert">
+          {error}
+        </p>
+      )}
+
+      <p className="sr-only" aria-live="polite">
+        {pending ? "Saving expense, please wait." : ""}
+      </p>
+
+      <Button
+        type="submit"
+        disabled={pending || selectedMembers.length === 0}
+        className="w-full"
+        aria-disabled={pending || selectedMembers.length === 0}
+      >
+        {pending ? (
+          <>
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
+            Saving…
+          </>
+        ) : (
+          "Add expense"
+        )}
       </Button>
     </form>
   );

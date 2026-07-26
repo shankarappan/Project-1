@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 /**
  * End-to-end integration tests against live Supabase.
- * Creates a temporary test user, exercises core flows, then cleans up.
+ * Creates temporary test users, exercises core reliability flows, then cleans up.
+ *
+ * Skips cleanly when env vars are missing (unit suite still covers local logic).
  */
 
 import { createClient } from "@supabase/supabase-js";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomBytes } from "node:crypto";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -17,18 +20,28 @@ const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (!url || !anonKey || !serviceKey) {
   console.error("Missing Supabase env vars. Ensure .env.local is present.");
-  process.exit(1);
+  console.error("Skipping live e2e — run unit tests with: npm test");
+  process.exit(0);
 }
 
 const admin = createClient(url, serviceKey, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
 
-const testEmail = `e2e-${Date.now()}@lets-split.test`;
-const testPassword = `Test-${Date.now()}!Aa`;
-let testUserId = "";
-let testGroupId = "";
-let testExpenseId = "";
+const stamp = Date.now();
+const adminEmail = `e2e-admin-${stamp}@lets-split.test`;
+const memberEmail = `e2e-member-${stamp}@lets-split.test`;
+const outsiderEmail = `e2e-out-${stamp}@lets-split.test`;
+const password = `Test-${stamp}!Aa`;
+
+const ids = {
+  adminUserId: "",
+  memberUserId: "",
+  outsiderUserId: "",
+  groupId: "",
+  expenseId: "",
+};
+
 let passed = 0;
 let failed = 0;
 
@@ -42,96 +55,272 @@ function fail(name, detail) {
   console.error(`  ✗ ${name}: ${detail}`);
 }
 
-async function applyMigration() {
-  const sql = readFileSync(
-    join(__dirname, "../supabase/migrations/002_fix_group_rls.sql"),
-    "utf8"
-  );
+async function applyMigration(filename) {
+  const sql = readFileSync(join(__dirname, "../supabase/migrations", filename), "utf8");
   const token = process.env.SUPABASE_ACCESS_TOKEN;
   const ref = url.match(/https:\/\/([^.]+)/)?.[1];
   if (!token || !ref) {
-    console.log("Skipping migration apply (no SUPABASE_ACCESS_TOKEN)");
+    console.log(`Skipping migration apply for ${filename} (no SUPABASE_ACCESS_TOKEN)`);
     return;
   }
-  const response = await fetch(`https://api.supabase.com/v1/projects/${ref}/database/query`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ query: sql }),
-  });
+  const response = await fetch(
+    `https://api.supabase.com/v1/projects/${ref}/database/query`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ query: sql }),
+    }
+  );
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`Migration failed: ${body}`);
+    throw new Error(`Migration ${filename} failed: ${body}`);
   }
-  ok("Applied RLS migration 002");
+  ok(`Applied migration ${filename}`);
 }
 
-async function setupUser() {
+async function createUser(email) {
   const { data, error } = await admin.auth.admin.createUser({
-    email: testEmail,
-    password: testPassword,
+    email,
+    password,
     email_confirm: true,
   });
   if (error || !data.user) throw new Error(error?.message ?? "createUser failed");
-  testUserId = data.user.id;
-  ok(`Created test user ${testEmail}`);
+  return data.user.id;
 }
 
 function userClient() {
   return createClient(url, anonKey);
 }
 
-async function signIn() {
+async function signIn(email) {
   const client = userClient();
   const { data, error } = await client.auth.signInWithPassword({
-    email: testEmail,
-    password: testPassword,
+    email,
+    password,
   });
   if (error || !data.session) throw new Error(error?.message ?? "signIn failed");
-  ok("Signed in test user");
   return createClient(url, anonKey, {
     global: { headers: { Authorization: `Bearer ${data.session.access_token}` } },
   });
 }
 
-async function testCreateGroup(client) {
-  const { data: group, error: groupError } = await client
-    .from("groups")
-    .insert({ name: "E2E Test Group", created_by: testUserId })
-    .select("id")
-    .single();
-
-  if (groupError || !group) {
-    fail("Create group", groupError?.message ?? "no data");
+async function testAuthSignIn() {
+  const client = await signIn(adminEmail);
+  const { data, error } = await client.auth.getUser();
+  if (error || !data.user) {
+    fail("Registration/sign-in", error?.message ?? "no user");
     return null;
   }
-  ok("Create group insert + select");
+  ok("Registration/sign-in");
+  return client;
+}
 
-  const { error: memberError } = await client.from("group_members").insert({
-    group_id: group.id,
-    user_id: testUserId,
-    role: "admin",
+async function testCreateGroupOnce(client) {
+  const requestId = `idem-${randomBytes(8).toString("hex")}`;
+
+  // Concurrent identical submissions must create exactly one group.
+  const results = await Promise.all(
+    Array.from({ length: 5 }, () =>
+      client.rpc("create_group_atomic", {
+        p_name: "E2E Reliability Group",
+        p_created_by: ids.adminUserId,
+        p_client_request_id: requestId,
+      })
+    )
+  );
+
+  const rpcMissing = results.every(
+    (r) =>
+      r.error &&
+      (r.error.code === "PGRST202" ||
+        /create_group_atomic|could not find the function/i.test(r.error.message))
+  );
+
+  if (rpcMissing) {
+    // App fails closed without migration 003 — do not exercise legacy inserts.
+    fail(
+      "Repeated create submission",
+      "create_group_atomic missing; apply migration 003 before e2e"
+    );
+    return null;
+  }
+
+  const idsFromRpc = results
+    .map((r) => r.data)
+    .filter(Boolean);
+  const unique = new Set(idsFromRpc);
+  if (unique.size !== 1 || results.some((r) => r.error)) {
+    fail(
+      "Repeated create submission",
+      results.find((r) => r.error)?.error?.message ??
+        `unique=${unique.size}`
+    );
+    return idsFromRpc[0] ?? null;
+  }
+
+  ok("Repeated create submission creates exactly one group");
+  return idsFromRpc[0];
+}
+
+async function testUnauthorizedAccess(outsiderClient, groupId) {
+  const { data, error } = await outsiderClient
+    .from("groups")
+    .select("id, name")
+    .eq("id", groupId)
+    .maybeSingle();
+
+  if (data) {
+    fail("Unauthorized access", "outsider could read group");
+    return;
+  }
+  // RLS typically returns empty rather than throwing
+  if (error && !/permission|row-level|policy/i.test(error.message)) {
+    fail("Unauthorized access", error.message);
+    return;
+  }
+  ok("Unauthorized access denied for outsider");
+}
+
+async function testMaliciousMembership(outsiderClient, memberClient, groupId) {
+  // Self-join without invite
+  const { error: selfJoinError } = await outsiderClient
+    .from("group_members")
+    .insert({
+      group_id: groupId,
+      user_id: ids.outsiderUserId,
+      role: "member",
+    });
+  if (!selfJoinError) {
+    fail("Malicious self-join without invite", "insert succeeded");
+  } else {
+    ok("Malicious self-join without invite denied");
+  }
+
+  // Member adding another user (after they joined via RPC)
+  const { error: addOtherError } = await memberClient.from("group_members").insert({
+    group_id: groupId,
+    user_id: ids.outsiderUserId,
+    role: "member",
   });
-  if (memberError) {
-    fail("Add group member", memberError.message);
-    return null;
+  if (!addOtherError) {
+    fail("Malicious member-add-other", "insert succeeded");
+  } else {
+    ok("Malicious member-add-other denied");
   }
-  ok("Add self as group member");
 
-  const { data: fetched, error: fetchError } = await client
-    .from("groups")
-    .select("id, name, group_members(user_id)")
-    .eq("id", group.id)
+  // Self-promotion to admin
+  const { error: promoteError } = await memberClient
+    .from("group_members")
+    .update({ role: "admin" })
+    .eq("group_id", groupId)
+    .eq("user_id", ids.memberUserId);
+  if (!promoteError) {
+    const { data: row } = await admin
+      .from("group_members")
+      .select("role")
+      .eq("group_id", groupId)
+      .eq("user_id", ids.memberUserId)
+      .maybeSingle();
+    if (row?.role === "admin") {
+      fail("Malicious self-promotion", "role became admin");
+    } else {
+      ok("Malicious self-promotion denied (no-op / blocked)");
+    }
+  } else {
+    ok("Malicious self-promotion denied");
+  }
+}
+
+async function testInviteFlows(adminClient, memberClient, outsiderClient, groupId) {
+  const token = randomBytes(16).toString("hex");
+  const { data: invite, error } = await adminClient
+    .from("invites")
+    .insert({
+      group_id: groupId,
+      invite_token: token,
+      created_by: ids.adminUserId,
+      expires_at: new Date(Date.now() + 7 * 86400000).toISOString(),
+    })
+    .select("invite_token")
     .single();
 
-  if (fetchError || !fetched) {
-    fail("Fetch group after create", fetchError?.message ?? "no data");
-    return null;
+  if (error || !invite) {
+    fail("Admin invite success", error?.message ?? "no data");
+    return;
   }
-  ok("Fetch group detail");
-  return group.id;
+  ok("Admin invite success");
+
+  // Join via accept_invite RPC (not direct group_members insert)
+  const { data: joinedGroupId, error: joinError } = await memberClient.rpc(
+    "accept_invite",
+    { p_token: token }
+  );
+  if (joinError || joinedGroupId !== groupId) {
+    fail("Invite/join via accept_invite RPC", joinError?.message ?? "no group id");
+  } else {
+    ok("Invite/join via accept_invite RPC");
+  }
+
+  // Ordinary member should be denied creating invites
+  const { error: memberInviteError } = await memberClient.from("invites").insert({
+    group_id: groupId,
+    invite_token: randomBytes(16).toString("hex"),
+    created_by: ids.memberUserId,
+  });
+  if (!memberInviteError) {
+    fail("Ordinary-member invite denial", "member was able to create invite");
+  } else {
+    ok("Ordinary-member invite denial");
+  }
+
+  // Duplicate invite token
+  const { error: dupError } = await adminClient.from("invites").insert({
+    group_id: groupId,
+    invite_token: token,
+    created_by: ids.adminUserId,
+  });
+  if (!dupError) {
+    fail("Duplicate invite", "duplicate token allowed");
+  } else {
+    ok("Duplicate invite rejected");
+  }
+
+  // Expired invite rejected by RPC
+  const expiredToken = randomBytes(16).toString("hex");
+  await adminClient.from("invites").insert({
+    group_id: groupId,
+    invite_token: expiredToken,
+    created_by: ids.adminUserId,
+    expires_at: new Date(Date.now() - 1000).toISOString(),
+  });
+  const { error: expiredError } = await outsiderClient.rpc("accept_invite", {
+    p_token: expiredToken,
+  });
+  if (!expiredError) {
+    fail("Expired invite", "accept_invite succeeded");
+  } else {
+    ok("Expired/invalid invite rejected by RPC");
+  }
+
+  // Existing member re-accept is idempotent via RPC
+  const token2 = randomBytes(16).toString("hex");
+  await adminClient.from("invites").insert({
+    group_id: groupId,
+    invite_token: token2,
+    created_by: ids.adminUserId,
+    expires_at: new Date(Date.now() + 7 * 86400000).toISOString(),
+  });
+  const { error: rejoinError } = await memberClient.rpc("accept_invite", {
+    p_token: token2,
+  });
+  if (rejoinError) {
+    fail("Existing-member behaviour", rejoinError.message);
+  } else {
+    ok("Existing-member behaviour");
+  }
 }
 
 async function testExpense(client, groupId) {
@@ -139,10 +328,10 @@ async function testExpense(client, groupId) {
     .from("expenses")
     .insert({
       group_id: groupId,
-      paid_by: testUserId,
-      created_by: testUserId,
+      paid_by: ids.adminUserId,
+      created_by: ids.adminUserId,
       title: "E2E Dinner",
-      amount: 90,
+      amount: 100,
       split_type: "equal",
       expense_date: new Date().toISOString().split("T")[0],
     })
@@ -150,97 +339,112 @@ async function testExpense(client, groupId) {
     .single();
 
   if (error || !expense) {
-    fail("Create expense", error?.message ?? "no data");
+    fail("Add expense", error?.message ?? "no data");
     return null;
   }
 
-  const { error: partError } = await client.from("expense_participants").insert({
-    expense_id: expense.id,
-    user_id: testUserId,
-    share_amount: 90,
-    share_percentage: 100,
-  });
+  const { error: partError } = await client.from("expense_participants").insert([
+    {
+      expense_id: expense.id,
+      user_id: ids.adminUserId,
+      share_amount: 50,
+      share_percentage: 50,
+    },
+    {
+      expense_id: expense.id,
+      user_id: ids.memberUserId,
+      share_amount: 50,
+      share_percentage: 50,
+    },
+  ]);
 
   if (partError) {
-    fail("Create expense participants", partError.message);
+    fail("Add expense participants", partError.message);
     return null;
   }
-  ok("Create expense with equal split");
+  ok("Add expense");
+
+  // Edit expense
+  const { error: updateError } = await client
+    .from("expenses")
+    .update({ title: "E2E Dinner (edited)", amount: 90 })
+    .eq("id", expense.id);
+  if (updateError) {
+    fail("Edit expense", updateError.message);
+  } else {
+    ok("Edit expense");
+  }
+
   return expense.id;
 }
 
-async function testBalances(client, groupId) {
-  const { data: expenses, error } = await client
-    .from("expenses")
-    .select("id, amount, paid_by, expense_participants(share_amount, user_id)")
-    .eq("group_id", groupId);
-
-  if (error || !expenses?.length) {
-    fail("Fetch expenses for balance check", error?.message ?? "no expenses");
+async function testDeleteExpense(client, expenseId) {
+  if (!expenseId) {
+    fail("Delete expense", "no expense id");
     return;
   }
-
-  const paid = Number(expenses[0].amount);
-  const share = Number(expenses[0].expense_participants?.[0]?.share_amount ?? 0);
-  if (paid !== 90 || share !== 90) {
-    fail("Expense amounts", `paid=${paid} share=${share}`);
+  const { error } = await client.from("expenses").delete().eq("id", expenseId);
+  if (error) {
+    fail("Delete expense", error.message);
     return;
   }
-  ok("Expense amounts persisted correctly");
+  ok("Delete expense");
 }
 
-async function testSettlement(client, groupId) {
-  // Solo member — skip settlement between different users
-  ok("Settlement skipped (solo group)");
-}
-
-async function testInvite(client, groupId) {
-  const token = `test-${Date.now()}`;
-  const { data, error } = await client
-    .from("invites")
-    .insert({
-      group_id: groupId,
-      invite_token: token,
-      created_by: testUserId,
-    })
-    .select("invite_token")
-    .single();
-
-  if (error || !data) {
-    fail("Create invite", error?.message ?? "no data");
+async function testDeleteGroup(client, groupId) {
+  const { error } = await client.from("groups").delete().eq("id", groupId);
+  if (error) {
+    // Creators can update; delete may require being creator with cascade
+    // Try via admin service for cleanup assertion of app policy separately
+    fail("Delete group", error.message);
     return;
   }
-  ok("Create invite link");
-}
-
-async function testSplitMath() {
-  ok("Split math covered by unit build (see npm run build)");
+  ids.groupId = "";
+  ok("Delete group");
 }
 
 async function cleanup() {
-  if (testGroupId) {
-    await admin.from("groups").delete().eq("id", testGroupId);
+  if (ids.groupId) {
+    await admin.from("groups").delete().eq("id", ids.groupId);
   }
-  if (testUserId) {
-    await admin.auth.admin.deleteUser(testUserId);
+  for (const userId of [
+    ids.adminUserId,
+    ids.memberUserId,
+    ids.outsiderUserId,
+  ]) {
+    if (userId) await admin.auth.admin.deleteUser(userId);
   }
   ok("Cleaned up test data");
 }
 
 async function main() {
-  console.log("\nLets Split E2E Tests\n");
+  console.log("\nLets Split Reliability E2E Tests\n");
 
   try {
-    await applyMigration();
-    testSplitMath();
-    await setupUser();
-    const client = await signIn();
-    testGroupId = (await testCreateGroup(client)) ?? "";
-    if (!testGroupId) throw new Error("Group creation failed");
-    testExpenseId = (await testExpense(client, testGroupId)) ?? "";
-    await testBalances(client, testGroupId);
-    await testSettlement(client, testGroupId);
-    await testInvite(client, testGroupId);
+    await applyMigration("002_fix_group_rls.sql");
+    await applyMigration("003_reliability.sql");
+
+    ids.adminUserId = await createUser(adminEmail);
+    ids.memberUserId = await createUser(memberEmail);
+    ids.outsiderUserId = await createUser(outsiderEmail);
+    ok("Created temporary users");
+
+    const adminClient = await testAuthSignIn();
+    if (!adminClient) throw new Error("Admin sign-in failed");
+
+    const memberClient = await signIn(memberEmail);
+    const outsiderClient = await signIn(outsiderEmail);
+    ok("Member and outsider signed in");
+
+    ids.groupId = (await testCreateGroupOnce(adminClient)) ?? "";
+    if (!ids.groupId) throw new Error("Group creation failed");
+
+    await testUnauthorizedAccess(outsiderClient, ids.groupId);
+    await testInviteFlows(adminClient, memberClient, outsiderClient, ids.groupId);
+    await testMaliciousMembership(outsiderClient, memberClient, ids.groupId);
+    ids.expenseId = (await testExpense(adminClient, ids.groupId)) ?? "";
+    await testDeleteExpense(adminClient, ids.expenseId);
+    await testDeleteGroup(adminClient, ids.groupId);
   } catch (err) {
     fail("Unexpected error", err instanceof Error ? err.message : String(err));
   } finally {

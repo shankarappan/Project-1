@@ -4,6 +4,15 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient, getAuthUser } from "@/lib/supabase/cached";
 import { ensureProfile } from "@/lib/ensure-profile";
+import {
+  canPerformOwnerAction,
+  requireGroupAdmin,
+} from "@/lib/auth/membership";
+import { userFacingActionError } from "@/lib/logging/safe-error";
+import {
+  isRpcMissing,
+  MIGRATION_REQUIRED_MESSAGE,
+} from "@/lib/service";
 import { randomBytes } from "crypto";
 
 export async function createGroup(formData: FormData): Promise<void> {
@@ -20,28 +29,35 @@ export async function createGroup(formData: FormData): Promise<void> {
     throw new Error("Group name is required.");
   }
 
-  const { data: group, error } = await supabase
-    .from("groups")
-    .insert({ name, created_by: user.id })
-    .select("id")
-    .single();
+  const clientRequestId =
+    String(formData.get("client_request_id") ?? "").trim() || null;
 
-  if (error || !group) {
-    throw new Error(error?.message ?? "Failed to create group.");
+  // Database-backed idempotency only (unique index + RPC). Fail closed if
+  // migration 003 is missing — no non-idempotent legacy insert path.
+  const { data: rpcGroupId, error: rpcError } = await supabase.rpc(
+    "create_group_atomic",
+    {
+      p_name: name,
+      p_created_by: user.id,
+      p_client_request_id: clientRequestId,
+    }
+  );
+
+  if (!rpcError && rpcGroupId) {
+    revalidatePath("/dashboard");
+    redirect(`/groups/${rpcGroupId}`);
   }
 
-  const { error: memberError } = await supabase.from("group_members").insert({
-    group_id: group.id,
-    user_id: user.id,
-    role: "admin",
-  });
-
-  if (memberError) {
-    throw new Error(memberError.message);
+  if (isRpcMissing(rpcError)) {
+    throw new Error(MIGRATION_REQUIRED_MESSAGE);
   }
 
-  revalidatePath("/dashboard");
-  redirect(`/groups/${group.id}`);
+  const { userMessage } = userFacingActionError(
+    "create_group_failed",
+    rpcError,
+    "Could not create group."
+  );
+  throw new Error(userMessage);
 }
 
 export async function getUserGroups() {
@@ -51,7 +67,7 @@ export async function getUserGroups() {
   const supabase = await createClient();
   const { data: memberships } = await supabase
     .from("group_members")
-    .select("group_id, groups(id, name, created_at, created_by)")
+    .select("role, group_id, groups(id, name, created_at, created_by)")
     .eq("user_id", user.id)
     .order("joined_at", { ascending: false });
 
@@ -59,10 +75,33 @@ export async function getUserGroups() {
     memberships
       ?.map((m) => {
         const group = m.groups;
-        if (Array.isArray(group)) return group[0];
-        return group;
+        const resolved = Array.isArray(group) ? group[0] : group;
+        if (!resolved) return null;
+        return {
+          id: resolved.id,
+          name: resolved.name,
+          created_at: resolved.created_at,
+          created_by: resolved.created_by,
+          role: m.role as string,
+          canInvite: canPerformOwnerAction({
+            role: m.role as string,
+            userId: user.id,
+            groupCreatedBy: resolved.created_by,
+          }),
+        };
       })
-      .filter((g): g is { id: string; name: string; created_at: string; created_by: string } => g != null) ?? []
+      .filter(
+        (
+          g
+        ): g is {
+          id: string;
+          name: string;
+          created_at: string;
+          created_by: string;
+          role: string;
+          canInvite: boolean;
+        } => g != null
+      ) ?? []
   );
 }
 
@@ -96,7 +135,13 @@ export async function createInvite(groupId: string, email?: string) {
     return { error: "Not authenticated." };
   }
 
+  await ensureProfile(user);
   const supabase = await createClient();
+
+  const admin = await requireGroupAdmin(supabase, groupId, user.id);
+  if (!admin.ok) {
+    return { error: admin.error };
+  }
 
   const inviteToken = randomBytes(24).toString("hex");
   const expiresAt = new Date();
@@ -115,7 +160,12 @@ export async function createInvite(groupId: string, email?: string) {
     .single();
 
   if (error || !data) {
-    return { error: error?.message ?? "Failed to create invite." };
+    const { userMessage } = userFacingActionError(
+      "create_invite_failed",
+      error,
+      "Could not create invite. Please try again."
+    );
+    return { error: userMessage };
   }
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
@@ -124,48 +174,49 @@ export async function createInvite(groupId: string, email?: string) {
   return { success: true, inviteUrl };
 }
 
+function mapAcceptInviteError(message: string): string {
+  const lower = message.toLowerCase();
+  if (lower.includes("expired")) {
+    return "This invite has expired.";
+  }
+  if (lower.includes("email mismatch")) {
+    return "This invite is for a different email address. Sign in with that email to join.";
+  }
+  if (lower.includes("not authenticated")) {
+    return "Sign in to accept this invite.";
+  }
+  if (
+    lower.includes("not found") ||
+    lower.includes("already used") ||
+    lower.includes("invite")
+  ) {
+    return "Invite not found, expired, or already used.";
+  }
+  return "Could not accept invite. Please try again.";
+}
+
 export async function acceptInvite(token: string) {
   const user = await getAuthUser();
 
   if (!user) {
-    redirect(`/login?redirect=/invite/${token}`);
+    redirect(`/login?redirect=/invite/${encodeURIComponent(token)}`);
   }
 
+  await ensureProfile(user!);
   const supabase = await createClient();
 
-  const { data: invite, error } = await supabase
-    .from("invites")
-    .select("*")
-    .eq("invite_token", token)
-    .is("accepted_by", null)
-    .single();
+  const { data: groupId, error } = await supabase.rpc("accept_invite", {
+    p_token: token,
+  });
 
-  if (error || !invite) {
-    return { error: "Invite not found or already used." };
+  if (!error && groupId) {
+    revalidatePath(`/groups/${groupId}`);
+    redirect(`/groups/${groupId}`);
   }
 
-  if (invite.expires_at && new Date(invite.expires_at) < new Date()) {
-    return { error: "This invite has expired." };
+  if (isRpcMissing(error)) {
+    return { error: MIGRATION_REQUIRED_MESSAGE };
   }
 
-  const { error: memberError } = await supabase.from("group_members").upsert(
-    {
-      group_id: invite.group_id,
-      user_id: user!.id,
-      role: "member",
-    },
-    { onConflict: "group_id,user_id" }
-  );
-
-  if (memberError) {
-    return { error: memberError.message };
-  }
-
-  await supabase
-    .from("invites")
-    .update({ accepted_by: user!.id })
-    .eq("id", invite.id);
-
-  revalidatePath(`/groups/${invite.group_id}`);
-  redirect(`/groups/${invite.group_id}`);
+  return { error: mapAcceptInviteError(error?.message ?? "") };
 }

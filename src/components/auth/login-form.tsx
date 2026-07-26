@@ -31,13 +31,16 @@ export function LoginForm({ redirectTo = "/dashboard" }: LoginFormProps) {
     }
 
     if (result.success) {
-      setMessage(result.message ?? "Check your email for a magic link.");
+      setMessage(
+        result.message ??
+          "Check your email for a magic link. Open it in this browser — links work only once."
+      );
     }
   }
 
   return (
     <div className="space-y-5">
-      <form action={handleMagicLink} className="space-y-4">
+      <form action={handleMagicLink} className="space-y-4" aria-busy={loading}>
         <div className="space-y-2">
           <Label htmlFor="email" className="text-brand-navy">
             Email address
@@ -49,18 +52,25 @@ export function LoginForm({ redirectTo = "/dashboard" }: LoginFormProps) {
             placeholder="you@example.com"
             required
             autoComplete="email"
+            disabled={loading}
             className="h-11 border-border/80 bg-background"
+            aria-invalid={error ? true : undefined}
           />
         </div>
         <Button
           type="submit"
           className="h-11 w-full bg-brand-blue text-base hover:bg-brand-blue/90"
           disabled={loading}
+          aria-disabled={loading}
         >
           <Mail className="mr-2 h-4 w-4" />
           {loading ? "Sending link..." : "Send magic link"}
         </Button>
       </form>
+
+      <p className="sr-only" aria-live="polite">
+        {loading ? "Sending magic link, please wait." : ""}
+      </p>
 
       {message && (
         <Alert className="border-brand-teal/30 bg-brand-teal/5">

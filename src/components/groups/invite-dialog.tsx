@@ -25,13 +25,17 @@ export function InviteDialog({ groupId }: InviteDialogProps) {
   const [email, setEmail] = useState("");
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function handleCreateInvite() {
+    if (loading) return;
     setLoading(true);
+    setError(null);
     const result = await createInvite(groupId, email || undefined);
     setLoading(false);
 
     if (result.error) {
+      setError(result.error);
       toast.error(result.error);
       return;
     }
@@ -49,7 +53,16 @@ export function InviteDialog({ groupId }: InviteDialogProps) {
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) {
+          setInviteUrl(null);
+          setError(null);
+        }
+      }}
+    >
       <DialogTrigger asChild>
         <Button variant="outline" size="sm">
           <UserPlus className="mr-2 h-4 w-4" />
@@ -61,7 +74,8 @@ export function InviteDialog({ groupId }: InviteDialogProps) {
           <DialogTitle>Invite members</DialogTitle>
           <DialogDescription>
             Share a link or optionally note an email for your records. Anyone with
-            the link can join after signing in.
+            the link can join after signing in. Invite links do not send email
+            automatically.
           </DialogDescription>
         </DialogHeader>
 
@@ -74,11 +88,23 @@ export function InviteDialog({ groupId }: InviteDialogProps) {
               placeholder="friend@example.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
+              disabled={loading}
             />
           </div>
 
+          {error && (
+            <p className="text-sm text-destructive" role="alert">
+              {error}
+            </p>
+          )}
+
           {!inviteUrl ? (
-            <Button onClick={handleCreateInvite} disabled={loading} className="w-full">
+            <Button
+              onClick={handleCreateInvite}
+              disabled={loading}
+              className="w-full"
+              aria-busy={loading}
+            >
               <Link2 className="mr-2 h-4 w-4" />
               {loading ? "Creating..." : "Generate invite link"}
             </Button>

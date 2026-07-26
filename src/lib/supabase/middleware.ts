@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { getSafeRedirectPath } from "@/lib/auth/safe-redirect";
 
 const PROTECTED_PREFIXES = ["/dashboard", "/groups", "/settings"];
 const PUBLIC_AUTH_PATHS = ["/", "/login"];
@@ -73,7 +74,7 @@ export async function updateSession(request: NextRequest) {
   if (!user && isProtected(pathname)) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
-    url.searchParams.set("redirect", pathname);
+    url.searchParams.set("redirect", getSafeRedirectPath(pathname));
     return NextResponse.redirect(url);
   }
 
@@ -83,6 +84,7 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
+  // /auth/callback must remain reachable so PKCE code exchange can set cookies.
   if (user && pathname.startsWith("/auth") && !pathname.startsWith("/auth/callback")) {
     const url = request.nextUrl.clone();
     url.pathname = "/dashboard";
