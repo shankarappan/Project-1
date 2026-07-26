@@ -3,10 +3,14 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient, getAuthUser } from "@/lib/supabase/cached";
+import { getSafeRedirectPath } from "@/lib/auth/safe-redirect";
+import { mapMagicLinkSendError } from "@/lib/auth/callback-errors";
 
 export async function signInWithMagicLink(formData: FormData) {
   const email = String(formData.get("email") ?? "").trim();
-  const redirectTo = String(formData.get("redirect") ?? "/dashboard");
+  const redirectTo = getSafeRedirectPath(
+    String(formData.get("redirect") ?? "/dashboard")
+  );
 
   if (!email) {
     return { error: "Email is required." };
@@ -15,28 +19,38 @@ export async function signInWithMagicLink(formData: FormData) {
   const supabase = await createClient();
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
 
-  const { error } = await supabase.auth.signInWithOtp({
-    email,
-    options: {
-      emailRedirectTo: `${appUrl}/auth/callback?redirect=${encodeURIComponent(redirectTo)}`,
-    },
-  });
+  try {
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: {
+        emailRedirectTo: `${appUrl}/auth/callback?redirect=${encodeURIComponent(redirectTo)}`,
+      },
+    });
 
-  if (error) {
-    return { error: error.message };
+    if (error) {
+      return { error: mapMagicLinkSendError(error.message) };
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Network error";
+    return { error: mapMagicLinkSendError(message) };
   }
 
-  return { success: true, message: "Check your email for a magic link to sign in." };
+  return {
+    success: true,
+    message:
+      "Check your email for a magic link to sign in. Open it in this browser — links work only once.",
+  };
 }
 
 export async function signInWithGoogle(redirectTo = "/dashboard") {
   const supabase = await createClient();
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  const safeRedirect = getSafeRedirectPath(redirectTo);
 
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: "google",
     options: {
-      redirectTo: `${appUrl}/auth/callback?redirect=${encodeURIComponent(redirectTo)}`,
+      redirectTo: `${appUrl}/auth/callback?redirect=${encodeURIComponent(safeRedirect)}`,
     },
   });
 

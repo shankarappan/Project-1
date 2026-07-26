@@ -5,6 +5,16 @@ import { redirect } from "next/navigation";
 import { createClient, getAuthUser } from "@/lib/supabase/cached";
 import { ensureProfile } from "@/lib/ensure-profile";
 import { calculateSplits, SplitValidationError } from "@/lib/splits/calculator";
+import {
+  MoneyParseError,
+  centsToDollars,
+  parseMoneyToCents,
+  parsePercentageToCentipercent,
+} from "@/lib/money/cents";
+import {
+  assertMembersOfGroup,
+  requireGroupMember,
+} from "@/lib/auth/membership";
 import type { SplitType } from "@/lib/types/database";
 
 function unwrapRelation<T>(value: T | T[] | null | undefined): T | null {
@@ -15,8 +25,42 @@ function unwrapRelation<T>(value: T | T[] | null | undefined): T | null {
 
 interface ParticipantInput {
   userId: string;
-  exactAmount?: number;
-  percentage?: number;
+  exactAmountCents?: number;
+  percentageCentipercent?: number;
+}
+
+function parseParticipants(
+  formData: FormData,
+  splitType: SplitType,
+  participantIds: string[]
+): ParticipantInput[] {
+  return participantIds.map((userId) => {
+    if (splitType === "exact") {
+      const raw = formData.get(`exact_${userId}`);
+      if (raw == null || String(raw).trim() === "") {
+        throw new SplitValidationError(
+          "Each participant needs a valid exact amount."
+        );
+      }
+      return {
+        userId,
+        exactAmountCents: parseMoneyToCents(String(raw)),
+      };
+    }
+    if (splitType === "percentage") {
+      const raw = formData.get(`pct_${userId}`);
+      if (raw == null || String(raw).trim() === "") {
+        throw new SplitValidationError(
+          "Each participant needs a valid percentage."
+        );
+      }
+      return {
+        userId,
+        percentageCentipercent: parsePercentageToCentipercent(String(raw)),
+      };
+    }
+    return { userId };
+  });
 }
 
 export async function createExpense(groupId: string, formData: FormData) {
@@ -29,45 +73,76 @@ export async function createExpense(groupId: string, formData: FormData) {
   await ensureProfile(user);
   const supabase = await createClient();
 
+  const membership = await requireGroupMember(supabase, groupId, user.id);
+  if (!membership.ok) {
+    return { error: membership.error };
+  }
+
   const title = String(formData.get("title") ?? "").trim();
   const description = String(formData.get("description") ?? "").trim() || null;
-  const amount = parseFloat(String(formData.get("amount") ?? "0"));
+  const amountRaw = String(formData.get("amount") ?? "");
   const paidBy = String(formData.get("paid_by") ?? "");
   const splitType = String(formData.get("split_type") ?? "equal") as SplitType;
   const expenseDate = String(formData.get("expense_date") ?? "");
   const currency = String(formData.get("currency") ?? "NZD");
-  const participantIds = formData.getAll("participant_ids").map(String);
+  const participantIds = Array.from(
+    new Set(formData.getAll("participant_ids").map(String).filter(Boolean))
+  );
 
   if (!title) return { error: "Title is required." };
   if (!paidBy) return { error: "Select who paid." };
-  if (isNaN(amount) || amount <= 0) return { error: "Enter a valid amount." };
-  if (participantIds.length === 0) return { error: "Select at least one participant." };
+  if (!["equal", "exact", "percentage"].includes(splitType)) {
+    return { error: "Invalid split type." };
+  }
+  if (participantIds.length === 0) {
+    return { error: "Select at least one participant." };
+  }
 
-  const participants: ParticipantInput[] = participantIds.map((userId) => {
-    if (splitType === "exact") {
-      return {
-        userId,
-        exactAmount: parseFloat(String(formData.get(`exact_${userId}`) ?? "0")),
-      };
+  let amountCents: number;
+  try {
+    amountCents = parseMoneyToCents(amountRaw);
+  } catch (err) {
+    return {
+      error:
+        err instanceof MoneyParseError ? err.message : "Enter a valid amount.",
+    };
+  }
+
+  if (amountCents <= 0) {
+    return { error: "Amount must be greater than zero." };
+  }
+
+  const memberCheck = await assertMembersOfGroup(supabase, groupId, [
+    paidBy,
+    ...participantIds,
+  ]);
+  if (!memberCheck.ok) {
+    return { error: memberCheck.error };
+  }
+
+  let participants: ParticipantInput[];
+  try {
+    participants = parseParticipants(formData, splitType, participantIds);
+  } catch (err) {
+    if (err instanceof SplitValidationError || err instanceof MoneyParseError) {
+      return { error: err.message };
     }
-    if (splitType === "percentage") {
-      return {
-        userId,
-        percentage: parseFloat(String(formData.get(`pct_${userId}`) ?? "0")),
-      };
-    }
-    return { userId };
-  });
+    throw err;
+  }
 
   let splits;
   try {
-    splits = calculateSplits(amount, splitType, participants);
+    splits = calculateSplits(0, splitType, participants, {
+      totalAmountCents: amountCents,
+    });
   } catch (err) {
     if (err instanceof SplitValidationError) {
       return { error: err.message };
     }
     throw err;
   }
+
+  const amount = centsToDollars(amountCents);
 
   const { data: expense, error } = await supabase
     .from("expenses")
@@ -109,7 +184,11 @@ export async function createExpense(groupId: string, formData: FormData) {
   redirect(`/groups/${groupId}`);
 }
 
-export async function updateExpense(expenseId: string, groupId: string, formData: FormData) {
+export async function updateExpense(
+  expenseId: string,
+  groupId: string,
+  formData: FormData
+) {
   const user = await getAuthUser();
 
   if (!user) {
@@ -117,38 +196,60 @@ export async function updateExpense(expenseId: string, groupId: string, formData
   }
 
   const supabase = await createClient();
+  const membership = await requireGroupMember(supabase, groupId, user.id);
+  if (!membership.ok) {
+    return { error: membership.error };
+  }
 
   const title = String(formData.get("title") ?? "").trim();
   const description = String(formData.get("description") ?? "").trim() || null;
-  const amount = parseFloat(String(formData.get("amount") ?? "0"));
+  const amountRaw = String(formData.get("amount") ?? "");
   const paidBy = String(formData.get("paid_by") ?? "");
   const splitType = String(formData.get("split_type") ?? "equal") as SplitType;
   const expenseDate = String(formData.get("expense_date") ?? "");
-  const participantIds = formData.getAll("participant_ids").map(String);
+  const participantIds = Array.from(
+    new Set(formData.getAll("participant_ids").map(String).filter(Boolean))
+  );
 
   if (!title) return { error: "Title is required." };
   if (!paidBy) return { error: "Select who paid." };
-  if (isNaN(amount) || amount <= 0) return { error: "Enter a valid amount." };
+  if (participantIds.length === 0) {
+    return { error: "Select at least one participant." };
+  }
 
-  const participants: ParticipantInput[] = participantIds.map((userId) => {
-    if (splitType === "exact") {
-      return {
-        userId,
-        exactAmount: parseFloat(String(formData.get(`exact_${userId}`) ?? "0")),
-      };
+  let amountCents: number;
+  try {
+    amountCents = parseMoneyToCents(amountRaw);
+  } catch (err) {
+    return {
+      error:
+        err instanceof MoneyParseError ? err.message : "Enter a valid amount.",
+    };
+  }
+
+  const memberCheck = await assertMembersOfGroup(supabase, groupId, [
+    paidBy,
+    ...participantIds,
+  ]);
+  if (!memberCheck.ok) {
+    return { error: memberCheck.error };
+  }
+
+  let participants: ParticipantInput[];
+  try {
+    participants = parseParticipants(formData, splitType, participantIds);
+  } catch (err) {
+    if (err instanceof SplitValidationError || err instanceof MoneyParseError) {
+      return { error: err.message };
     }
-    if (splitType === "percentage") {
-      return {
-        userId,
-        percentage: parseFloat(String(formData.get(`pct_${userId}`) ?? "0")),
-      };
-    }
-    return { userId };
-  });
+    throw err;
+  }
 
   let splits;
   try {
-    splits = calculateSplits(amount, splitType, participants);
+    splits = calculateSplits(0, splitType, participants, {
+      totalAmountCents: amountCents,
+    });
   } catch (err) {
     if (err instanceof SplitValidationError) {
       return { error: err.message };
@@ -161,7 +262,7 @@ export async function updateExpense(expenseId: string, groupId: string, formData
     .update({
       title,
       description,
-      amount,
+      amount: centsToDollars(amountCents),
       paid_by: paidBy,
       split_type: splitType,
       expense_date: expenseDate,
@@ -195,7 +296,16 @@ export async function updateExpense(expenseId: string, groupId: string, formData
 }
 
 export async function deleteExpense(expenseId: string, groupId: string) {
+  const user = await getAuthUser();
+  if (!user) {
+    return { error: "Not authenticated." };
+  }
+
   const supabase = await createClient();
+  const membership = await requireGroupMember(supabase, groupId, user.id);
+  if (!membership.ok) {
+    return { error: membership.error };
+  }
 
   const { error } = await supabase.from("expenses").delete().eq("id", expenseId);
 
@@ -272,13 +382,17 @@ export async function getRecentActivity(limit = 10) {
   const [{ data: expenses }, { data: settlements }] = await Promise.all([
     supabase
       .from("expenses")
-      .select("id, title, amount, currency, group_id, created_at, created_by, groups(name), profiles!expenses_created_by_fkey(full_name)")
+      .select(
+        "id, title, amount, currency, group_id, created_at, created_by, groups(name), profiles!expenses_created_by_fkey(full_name)"
+      )
       .in("group_id", groupIds)
       .order("created_at", { ascending: false })
       .limit(limit),
     supabase
       .from("settlements")
-      .select("id, amount, currency, group_id, settled_at, created_by, groups(name), profiles!settlements_created_by_fkey(full_name)")
+      .select(
+        "id, amount, currency, group_id, settled_at, created_by, groups(name), profiles!settlements_created_by_fkey(full_name)"
+      )
       .in("group_id", groupIds)
       .order("settled_at", { ascending: false })
       .limit(limit),
@@ -292,9 +406,17 @@ export async function getRecentActivity(limit = 10) {
       amount: Number(e.amount),
       currency: e.currency,
       group_id: e.group_id,
-      group_name: unwrapRelation(e.groups as { name: string } | { name: string }[] | null)?.name ?? "Group",
+      group_name:
+        unwrapRelation(e.groups as { name: string } | { name: string }[] | null)
+          ?.name ?? "Group",
       created_at: e.created_at,
-      actor_name: unwrapRelation(e.profiles as { full_name: string | null } | { full_name: string | null }[] | null)?.full_name ?? null,
+      actor_name:
+        unwrapRelation(
+          e.profiles as
+            | { full_name: string | null }
+            | { full_name: string | null }[]
+            | null
+        )?.full_name ?? null,
     })) ?? [];
 
   const settlementItems =
@@ -305,12 +427,23 @@ export async function getRecentActivity(limit = 10) {
       amount: Number(s.amount),
       currency: s.currency,
       group_id: s.group_id,
-      group_name: unwrapRelation(s.groups as { name: string } | { name: string }[] | null)?.name ?? "Group",
+      group_name:
+        unwrapRelation(s.groups as { name: string } | { name: string }[] | null)
+          ?.name ?? "Group",
       created_at: s.settled_at,
-      actor_name: unwrapRelation(s.profiles as { full_name: string | null } | { full_name: string | null }[] | null)?.full_name ?? null,
+      actor_name:
+        unwrapRelation(
+          s.profiles as
+            | { full_name: string | null }
+            | { full_name: string | null }[]
+            | null
+        )?.full_name ?? null,
     })) ?? [];
 
   return [...expenseItems, ...settlementItems]
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .sort(
+      (a, b) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    )
     .slice(0, limit);
 }

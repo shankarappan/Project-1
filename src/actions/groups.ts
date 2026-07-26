@@ -4,7 +4,16 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient, getAuthUser } from "@/lib/supabase/cached";
 import { ensureProfile } from "@/lib/ensure-profile";
+import {
+  canPerformOwnerAction,
+  requireGroupAdmin,
+} from "@/lib/auth/membership";
 import { randomBytes } from "crypto";
+
+function isUniqueViolation(error: { code?: string; message?: string } | null) {
+  if (!error) return false;
+  return error.code === "23505" || /duplicate key|unique constraint/i.test(error.message ?? "");
+}
 
 export async function createGroup(formData: FormData): Promise<void> {
   const user = await getAuthUser();
@@ -20,13 +29,83 @@ export async function createGroup(formData: FormData): Promise<void> {
     throw new Error("Group name is required.");
   }
 
-  const { data: group, error } = await supabase
+  const clientRequestId =
+    String(formData.get("client_request_id") ?? "").trim() || null;
+
+  // Prefer atomic RPC (migration 003). Fall back for environments not yet migrated.
+  const { data: rpcGroupId, error: rpcError } = await supabase.rpc(
+    "create_group_atomic",
+    {
+      p_name: name,
+      p_created_by: user.id,
+      p_client_request_id: clientRequestId,
+    }
+  );
+
+  if (!rpcError && rpcGroupId) {
+    revalidatePath("/dashboard");
+    redirect(`/groups/${rpcGroupId}`);
+  }
+
+  const rpcMissing =
+    rpcError?.code === "PGRST202" ||
+    /create_group_atomic|could not find the function/i.test(rpcError?.message ?? "");
+
+  if (rpcError && !rpcMissing) {
+    throw new Error(rpcError.message);
+  }
+
+  if (clientRequestId) {
+    const { data: existing } = await supabase
+      .from("groups")
+      .select("id")
+      .eq("created_by", user.id)
+      .eq("client_request_id", clientRequestId)
+      .maybeSingle();
+
+    if (existing?.id) {
+      revalidatePath("/dashboard");
+      redirect(`/groups/${existing.id}`);
+    }
+  }
+
+  let { data: group, error } = await supabase
     .from("groups")
-    .insert({ name, created_by: user.id })
+    .insert({
+      name,
+      created_by: user.id,
+      ...(clientRequestId ? { client_request_id: clientRequestId } : {}),
+    })
     .select("id")
     .single();
 
+  // Pre-migration environments may not have client_request_id yet.
+  if (
+    error &&
+    clientRequestId &&
+    /client_request_id/i.test(error.message ?? "")
+  ) {
+    ({ data: group, error } = await supabase
+      .from("groups")
+      .insert({ name, created_by: user.id })
+      .select("id")
+      .single());
+  }
+
   if (error || !group) {
+    if (clientRequestId && isUniqueViolation(error)) {
+      const { data: existing } = await supabase
+        .from("groups")
+        .select("id")
+        .eq("created_by", user.id)
+        .eq("client_request_id", clientRequestId)
+        .maybeSingle();
+
+      if (existing?.id) {
+        revalidatePath("/dashboard");
+        redirect(`/groups/${existing.id}`);
+      }
+    }
     throw new Error(error?.message ?? "Failed to create group.");
   }
 
@@ -36,7 +115,7 @@ export async function createGroup(formData: FormData): Promise<void> {
     role: "admin",
   });
 
-  if (memberError) {
+  if (memberError && !isUniqueViolation(memberError)) {
     throw new Error(memberError.message);
   }
 
@@ -51,7 +130,7 @@ export async function getUserGroups() {
   const supabase = await createClient();
   const { data: memberships } = await supabase
     .from("group_members")
-    .select("group_id, groups(id, name, created_at, created_by)")
+    .select("role, group_id, groups(id, name, created_at, created_by)")
     .eq("user_id", user.id)
     .order("joined_at", { ascending: false });
 
@@ -59,10 +138,33 @@ export async function getUserGroups() {
     memberships
       ?.map((m) => {
         const group = m.groups;
-        if (Array.isArray(group)) return group[0];
-        return group;
+        const resolved = Array.isArray(group) ? group[0] : group;
+        if (!resolved) return null;
+        return {
+          id: resolved.id,
+          name: resolved.name,
+          created_at: resolved.created_at,
+          created_by: resolved.created_by,
+          role: m.role as string,
+          canInvite: canPerformOwnerAction({
+            role: m.role as string,
+            userId: user.id,
+            groupCreatedBy: resolved.created_by,
+          }),
+        };
       })
-      .filter((g): g is { id: string; name: string; created_at: string; created_by: string } => g != null) ?? []
+      .filter(
+        (
+          g
+        ): g is {
+          id: string;
+          name: string;
+          created_at: string;
+          created_by: string;
+          role: string;
+          canInvite: boolean;
+        } => g != null
+      ) ?? []
   );
 }
 
@@ -96,7 +198,13 @@ export async function createInvite(groupId: string, email?: string) {
     return { error: "Not authenticated." };
   }
 
+  await ensureProfile(user);
   const supabase = await createClient();
+
+  const admin = await requireGroupAdmin(supabase, groupId, user.id);
+  if (!admin.ok) {
+    return { error: admin.error };
+  }
 
   const inviteToken = randomBytes(24).toString("hex");
   const expiresAt = new Date();
@@ -115,7 +223,13 @@ export async function createInvite(groupId: string, email?: string) {
     .single();
 
   if (error || !data) {
-    return { error: error?.message ?? "Failed to create invite." };
+    // Surface the exact constraint/RLS failure for debugging without tokens.
+    const code = error?.code ? ` (${error.code})` : "";
+    return {
+      error: error?.message
+        ? `${error.message}${code}`
+        : "Failed to create invite.",
+    };
   }
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
@@ -128,9 +242,10 @@ export async function acceptInvite(token: string) {
   const user = await getAuthUser();
 
   if (!user) {
-    redirect(`/login?redirect=/invite/${token}`);
+    redirect(`/login?redirect=/invite/${encodeURIComponent(token)}`);
   }
 
+  await ensureProfile(user!);
   const supabase = await createClient();
 
   const { data: invite, error } = await supabase
@@ -138,33 +253,60 @@ export async function acceptInvite(token: string) {
     .select("*")
     .eq("invite_token", token)
     .is("accepted_by", null)
-    .single();
+    .maybeSingle();
 
-  if (error || !invite) {
-    return { error: "Invite not found or already used." };
+  if (error) {
+    return { error: `Unable to load invite: ${error.message}` };
+  }
+
+  if (!invite) {
+    return { error: "Invite not found, expired, or already used." };
   }
 
   if (invite.expires_at && new Date(invite.expires_at) < new Date()) {
     return { error: "This invite has expired." };
   }
 
-  const { error: memberError } = await supabase.from("group_members").upsert(
-    {
+  if (invite.email) {
+    const signedInEmail = user!.email?.toLowerCase();
+    if (!signedInEmail || signedInEmail !== invite.email.toLowerCase()) {
+      return {
+        error: `This invite is for ${invite.email}. Sign in with that email to join.`,
+      };
+    }
+  }
+
+  const { data: existingMember } = await supabase
+    .from("group_members")
+    .select("id")
+    .eq("group_id", invite.group_id)
+    .eq("user_id", user!.id)
+    .maybeSingle();
+
+  if (!existingMember) {
+    const { error: memberError } = await supabase.from("group_members").insert({
       group_id: invite.group_id,
       user_id: user!.id,
       role: "member",
-    },
-    { onConflict: "group_id,user_id" }
-  );
+    });
 
-  if (memberError) {
-    return { error: memberError.message };
+    if (memberError && !isUniqueViolation(memberError)) {
+      return { error: memberError.message };
+    }
   }
 
-  await supabase
+  const { error: acceptError } = await supabase
     .from("invites")
     .update({ accepted_by: user!.id })
-    .eq("id", invite.id);
+    .eq("id", invite.id)
+    .is("accepted_by", null);
+
+  if (acceptError) {
+    // Already a member is still a success path for join UX.
+    if (!existingMember) {
+      return { error: acceptError.message };
+    }
+  }
 
   revalidatePath(`/groups/${invite.group_id}`);
   redirect(`/groups/${invite.group_id}`);

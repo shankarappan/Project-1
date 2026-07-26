@@ -13,6 +13,7 @@ export interface Group {
   name: string;
   created_by: string;
   created_at: string;
+  client_request_id?: string | null;
 }
 
 export interface GroupMember {

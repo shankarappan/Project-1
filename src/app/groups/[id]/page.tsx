@@ -31,6 +31,9 @@ export default async function GroupDetailPage({
   if (!group) notFound();
 
   const members = (group.group_members as GroupMember[]) ?? [];
+  const currentMembership = members.find((m) => m.user_id === user?.id);
+  const canInvite =
+    currentMembership?.role === "admin" || group.created_by === user?.id;
 
   return (
     <AppShell profile={profile}>
@@ -50,7 +53,7 @@ export default async function GroupDetailPage({
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <InviteDialog groupId={id} />
+            {canInvite && <InviteDialog groupId={id} />}
             <Button variant="outline" size="sm" asChild>
               <Link href={`/groups/${id}/settlements`}>
                 <HandCoins className="mr-2 h-4 w-4" />

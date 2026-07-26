@@ -1,12 +1,8 @@
-import Link from "next/link";
 import { LogoLockup } from "@/components/brand/logo-lockup";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { LoginForm } from "@/components/auth/login-form";
-
-const AUTH_ERRORS: Record<string, string> = {
-  auth: "Sign-in failed. The link may have expired — request a new magic link.",
-  missing_code: "Invalid sign-in link. Please request a new magic link.",
-};
+import { getAuthErrorMessage } from "@/lib/auth/callback-errors";
+import { getSafeRedirectPath } from "@/lib/auth/safe-redirect";
 
 export default async function LoginPage({
   searchParams,
@@ -14,10 +10,11 @@ export default async function LoginPage({
   searchParams: Promise<{ redirect?: string; error?: string; message?: string }>;
 }) {
   const params = await searchParams;
-  const redirectTo = params.redirect ?? "/dashboard";
-  const errorMessage =
-    params.message ??
-    (params.error ? AUTH_ERRORS[params.error] ?? "Sign-in failed." : null);
+  const redirectTo = getSafeRedirectPath(params.redirect ?? "/dashboard");
+  // Prefer mapped codes; never trust raw provider messages in the query string.
+  const errorMessage = params.error
+    ? getAuthErrorMessage(params.error, params.message)
+    : null;
 
   return (
     <div className="flex min-h-screen flex-col bg-hero-gradient">
