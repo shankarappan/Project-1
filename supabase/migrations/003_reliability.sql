@@ -1,14 +1,14 @@
 -- Reliability + security: idempotency, invite join RPC, tightened membership RLS,
--- atomic expense create/update.
+-- atomic expense create/update with DB-side financial invariants.
 --
 -- EXPAND-ONLY / BACKWARD COMPATIBLE relative to 001/002 (no drops of columns).
 -- This file is the single not-yet-applied migration — edit in place until applied.
 --
--- ROLLOUT (do not apply from this agent to production):
+-- ROLLOUT (MIGRATION FIRST — app fails closed without these RPCs):
 -- 1. Review SQL.
 -- 2. Apply on staging / local Supabase.
 -- 3. Verify create-group, invite accept, expense create/update, malicious-client denials.
--- 4. Apply to production, then deploy app code that depends on these objects.
+-- 4. Apply to production FIRST, then deploy app code that depends on these objects.
 
 -- ---------------------------------------------------------------------------
 -- Group create idempotency (AUTHORITATIVE; not process memory)
@@ -197,8 +197,176 @@ revoke all on function public.accept_invite(text) from public;
 grant execute on function public.accept_invite(text) to authenticated;
 
 -- ---------------------------------------------------------------------------
--- Atomic expense create / update (expense + participants in one transaction)
+-- Atomic expense create / update with DB-side financial invariants.
+-- SECURITY DEFINER must NOT trust client payload — validate before mutate.
 -- ---------------------------------------------------------------------------
+
+create or replace function public.assert_expense_split_payload(
+  p_group_id uuid,
+  p_paid_by uuid,
+  p_title text,
+  p_amount numeric,
+  p_split_type text,
+  p_participants jsonb
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_participant jsonb;
+  v_user_id uuid;
+  v_share numeric;
+  v_pct numeric;
+  v_count integer;
+  v_distinct integer;
+  v_sum_shares numeric := 0;
+  v_sum_pct numeric := 0;
+  v_amount_cents bigint;
+  v_share_cents bigint;
+  v_base bigint;
+  v_rem bigint;
+  v_high integer := 0;
+  v_low integer := 0;
+begin
+  if p_split_type is null or p_split_type not in ('equal', 'exact', 'percentage') then
+    raise exception 'Invalid split type';
+  end if;
+
+  if p_title is null or length(trim(p_title)) = 0 then
+    raise exception 'Title is required';
+  end if;
+
+  if p_amount is null or p_amount <= 0 then
+    raise exception 'Amount must be greater than zero';
+  end if;
+
+  -- Currency cents only (numeric scale <= 2)
+  if p_amount <> trunc(p_amount, 2) then
+    raise exception 'Amount must use at most 2 decimal places';
+  end if;
+
+  if p_participants is null
+     or jsonb_typeof(p_participants) <> 'array'
+     or jsonb_array_length(p_participants) = 0 then
+    raise exception 'Select at least one participant';
+  end if;
+
+  select count(*), count(distinct (e->>'user_id'))
+    into v_count, v_distinct
+  from jsonb_array_elements(p_participants) e;
+
+  if v_count <> v_distinct then
+    raise exception 'Duplicate participants';
+  end if;
+
+  if not exists (
+    select 1 from public.group_members
+    where group_id = p_group_id and user_id = p_paid_by
+  ) then
+    raise exception 'Payer and participants must be members of this group';
+  end if;
+
+  for v_participant in select * from jsonb_array_elements(p_participants)
+  loop
+    begin
+      v_user_id := (v_participant->>'user_id')::uuid;
+    exception
+      when others then
+        raise exception 'Invalid participant user id';
+    end;
+
+    if not exists (
+      select 1 from public.group_members
+      where group_id = p_group_id and user_id = v_user_id
+    ) then
+      raise exception 'Payer and participants must be members of this group';
+    end if;
+
+    if v_participant->>'share_amount' is null then
+      raise exception 'Share amount is required';
+    end if;
+
+    begin
+      v_share := (v_participant->>'share_amount')::numeric;
+    exception
+      when others then
+        raise exception 'Invalid share amount';
+    end;
+
+    if v_share < 0 then
+      raise exception 'Share amount cannot be negative';
+    end if;
+
+    if v_share <> trunc(v_share, 2) then
+      raise exception 'Share amount must use at most 2 decimal places';
+    end if;
+
+    v_sum_shares := v_sum_shares + v_share;
+
+    if p_split_type = 'percentage' then
+      if nullif(v_participant->>'share_percentage', '') is null then
+        raise exception 'Percentage is required';
+      end if;
+      begin
+        v_pct := (v_participant->>'share_percentage')::numeric;
+      exception
+        when others then
+          raise exception 'Invalid percentage';
+      end;
+      if v_pct < 0 then
+        raise exception 'Percentage cannot be negative';
+      end if;
+      if v_pct <> trunc(v_pct, 2) then
+        raise exception 'Percentage must use at most 2 decimal places';
+      end if;
+      v_sum_pct := v_sum_pct + v_pct;
+    end if;
+  end loop;
+
+  if v_sum_shares <> p_amount then
+    raise exception 'Share amounts must equal expense amount';
+  end if;
+
+  if p_split_type = 'percentage' and v_sum_pct <> 100 then
+    raise exception 'Percentages must total 100';
+  end if;
+
+  -- Equal split: shares must be a deterministic equal division in cents
+  -- (each share is floor(total/n) or floor(total/n)+1; high-share count = remainder).
+  if p_split_type = 'equal' then
+    v_amount_cents := round(p_amount * 100)::bigint;
+    v_base := v_amount_cents / v_count;
+    v_rem := v_amount_cents % v_count;
+
+    for v_participant in select * from jsonb_array_elements(p_participants)
+    loop
+      v_share_cents := round(((v_participant->>'share_amount')::numeric) * 100)::bigint;
+      if v_share_cents = v_base then
+        v_low := v_low + 1;
+      elsif v_share_cents = v_base + 1 then
+        v_high := v_high + 1;
+      else
+        raise exception 'Equal split shares are inconsistent';
+      end if;
+    end loop;
+
+    if v_high <> v_rem or (v_high + v_low) <> v_count then
+      raise exception 'Equal split shares are inconsistent';
+    end if;
+  end if;
+end;
+$$;
+
+revoke all on function public.assert_expense_split_payload(
+  uuid, uuid, text, numeric, text, jsonb
+) from public;
+-- Internal helper: executable by authenticated via the wrapping RPCs only.
+grant execute on function public.assert_expense_split_payload(
+  uuid, uuid, text, numeric, text, jsonb
+) to authenticated;
+
 create or replace function public.create_expense_atomic(
   p_group_id uuid,
   p_paid_by uuid,
@@ -228,36 +396,9 @@ begin
     raise exception 'Not a group member';
   end if;
 
-  if p_title is null or length(trim(p_title)) = 0 then
-    raise exception 'Title is required';
-  end if;
-
-  if p_amount is null or p_amount <= 0 then
-    raise exception 'Amount must be greater than zero';
-  end if;
-
-  if p_participants is null or jsonb_array_length(p_participants) = 0 then
-    raise exception 'Select at least one participant';
-  end if;
-
-  -- Payer and every participant must be group members
-  if not exists (
-    select 1 from public.group_members
-    where group_id = p_group_id and user_id = p_paid_by
-  ) then
-    raise exception 'Payer and participants must be members of this group';
-  end if;
-
-  for v_participant in select * from jsonb_array_elements(p_participants)
-  loop
-    if not exists (
-      select 1 from public.group_members
-      where group_id = p_group_id
-        and user_id = (v_participant->>'user_id')::uuid
-    ) then
-      raise exception 'Payer and participants must be members of this group';
-    end if;
-  end loop;
+  perform public.assert_expense_split_payload(
+    p_group_id, p_paid_by, p_title, p_amount, p_split_type, p_participants
+  );
 
   insert into public.expenses (
     group_id, paid_by, created_by, title, description,
@@ -328,27 +469,9 @@ begin
     raise exception 'Expense not found';
   end if;
 
-  if p_participants is null or jsonb_array_length(p_participants) = 0 then
-    raise exception 'Select at least one participant';
-  end if;
-
-  if not exists (
-    select 1 from public.group_members
-    where group_id = p_group_id and user_id = p_paid_by
-  ) then
-    raise exception 'Payer and participants must be members of this group';
-  end if;
-
-  for v_participant in select * from jsonb_array_elements(p_participants)
-  loop
-    if not exists (
-      select 1 from public.group_members
-      where group_id = p_group_id
-        and user_id = (v_participant->>'user_id')::uuid
-    ) then
-      raise exception 'Payer and participants must be members of this group';
-    end if;
-  end loop;
+  perform public.assert_expense_split_payload(
+    p_group_id, p_paid_by, p_title, p_amount, p_split_type, p_participants
+  );
 
   update public.expenses
   set

@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MIGRATION_REQUIRED_MESSAGE } from "@/lib/service";
 
 /**
- * Proves createGroup's production path recovers from a Postgres unique
- * violation (23505) by re-selecting — the cross-instance guarantee on Vercel.
- * No in-memory idempotency store is involved.
+ * createGroup uses create_group_atomic only. Fail closed when RPC is missing —
+ * no non-idempotent legacy insert path (multi-instance Vercel safety).
  */
 
 const getAuthUser = vi.fn();
@@ -32,7 +32,7 @@ vi.mock("next/navigation", () => ({
 
 import { createGroup } from "./groups";
 
-describe("createGroup DB idempotency (cross-instance)", () => {
+describe("createGroup DB idempotency (fail closed)", () => {
   beforeEach(() => {
     getAuthUser.mockReset();
     ensureProfile.mockReset();
@@ -40,67 +40,7 @@ describe("createGroup DB idempotency (cross-instance)", () => {
     fromMock.mockReset();
   });
 
-  it("returns the existing group when insert hits unique(created_by, client_request_id)", async () => {
-    getAuthUser.mockResolvedValue({ id: "user-1", email: "a@test.com" });
-    // RPC missing → exercise the insert + unique-violation fallback used when
-    // two Vercel instances race the same client_request_id against Postgres.
-    rpc.mockResolvedValue({
-      data: null,
-      error: { code: "PGRST202", message: "Could not find the function" },
-    });
-
-    let selectCalls = 0;
-    fromMock.mockImplementation((table: string) => {
-      if (table !== "groups") {
-        return {
-          insert: () => ({
-            then: (resolve: (v: unknown) => unknown) =>
-              resolve({ error: null }),
-          }),
-        };
-      }
-
-      return {
-        select: () => ({
-          eq: () => ({
-            eq: () => ({
-              maybeSingle: async () => {
-                selectCalls += 1;
-                // First select (pre-insert): empty. Second (after 23505): winner.
-                if (selectCalls === 1) {
-                  return { data: null, error: null };
-                }
-                return { data: { id: "existing-group" }, error: null };
-              },
-            }),
-          }),
-        }),
-        insert: () => ({
-          select: () => ({
-            single: async () => ({
-              data: null,
-              error: {
-                code: "23505",
-                message:
-                  'duplicate key value violates unique constraint "groups_created_by_client_request_id_uidx"',
-              },
-            }),
-          }),
-        }),
-      };
-    });
-
-    const fd = new FormData();
-    fd.set("name", "Weekend trip");
-    fd.set("client_request_id", "shared-uuid-across-instances");
-
-    await expect(createGroup(fd)).rejects.toThrow(
-      "REDIRECT:/groups/existing-group"
-    );
-    expect(selectCalls).toBeGreaterThanOrEqual(2);
-  });
-
-  it("prefers create_group_atomic RPC (DB transaction) when available", async () => {
+  it("uses create_group_atomic RPC when available", async () => {
     getAuthUser.mockResolvedValue({ id: "user-1", email: "a@test.com" });
     rpc.mockResolvedValue({ data: "rpc-group-id", error: null });
 
@@ -117,5 +57,20 @@ describe("createGroup DB idempotency (cross-instance)", () => {
       p_created_by: "user-1",
       p_client_request_id: "uuid-1",
     });
+  });
+
+  it("fails closed when create_group_atomic is missing", async () => {
+    getAuthUser.mockResolvedValue({ id: "user-1", email: "a@test.com" });
+    rpc.mockResolvedValue({
+      data: null,
+      error: { code: "PGRST202", message: "Could not find the function" },
+    });
+
+    const fd = new FormData();
+    fd.set("name", "Weekend trip");
+    fd.set("client_request_id", "shared-uuid-across-instances");
+
+    await expect(createGroup(fd)).rejects.toThrow(MIGRATION_REQUIRED_MESSAGE);
+    expect(fromMock).not.toHaveBeenCalled();
   });
 });

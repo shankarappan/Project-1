@@ -140,70 +140,12 @@ async function testCreateGroupOnce(client) {
   );
 
   if (rpcMissing) {
-    // Fallback path using unique index + inserts
-    const inserts = await Promise.all(
-      Array.from({ length: 5 }, async () => {
-        const { data, error } = await client
-          .from("groups")
-          .insert({
-            name: "E2E Reliability Group",
-            created_by: ids.adminUserId,
-            client_request_id: requestId,
-          })
-          .select("id")
-          .maybeSingle();
-        return { data, error };
-      })
+    // App fails closed without migration 003 — do not exercise legacy inserts.
+    fail(
+      "Repeated create submission",
+      "create_group_atomic missing; apply migration 003 before e2e"
     );
-
-    const createdIds = inserts
-      .map((r) => r.data?.id)
-      .filter(Boolean);
-    const { data: listed, error: listError } = await client
-      .from("groups")
-      .select("id")
-      .eq("created_by", ids.adminUserId)
-      .eq("client_request_id", requestId);
-
-    if (listError) {
-      fail("Repeated create submission", listError.message);
-      return null;
-    }
-
-    if ((listed?.length ?? 0) !== 1) {
-      // Column may not exist yet — fall back to single create for remaining tests
-      if (inserts.some((r) => /client_request_id/i.test(r.error?.message ?? ""))) {
-        const { data: group, error } = await client
-          .from("groups")
-          .insert({ name: "E2E Reliability Group", created_by: ids.adminUserId })
-          .select("id")
-          .single();
-        if (error || !group) {
-          fail("Create group fallback", error?.message ?? "no data");
-          return null;
-        }
-        await client.from("group_members").insert({
-          group_id: group.id,
-          user_id: ids.adminUserId,
-          role: "admin",
-        });
-        ok("Create group (migration 003 not applied; skipped concurrency assert)");
-        return group.id;
-      }
-      fail(
-        "Repeated create submission",
-        `expected 1 group, got ${listed?.length}; created=${createdIds.length}`
-      );
-      return listed?.[0]?.id ?? null;
-    }
-
-    const groupId = listed[0].id;
-    await client.from("group_members").upsert(
-      { group_id: groupId, user_id: ids.adminUserId, role: "admin" },
-      { onConflict: "group_id,user_id" }
-    );
-    ok("Repeated create submission creates exactly one group");
-    return groupId;
+    return null;
   }
 
   const idsFromRpc = results

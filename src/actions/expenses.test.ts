@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MIGRATION_REQUIRED_MESSAGE } from "@/lib/service";
 
 const getAuthUser = vi.fn();
 const ensureProfile = vi.fn();
@@ -38,23 +39,6 @@ vi.mock("next/navigation", () => ({
 }));
 
 import { createExpense, updateExpense } from "./expenses";
-
-function chain(result: { data?: unknown; error?: unknown }) {
-  const self = {
-    select: () => self,
-    insert: () => self,
-    update: () => self,
-    delete: () => self,
-    eq: () => self,
-    single: async () => result,
-    maybeSingle: async () => result,
-    then: (
-      resolve: (value: { data?: unknown; error?: unknown }) => unknown,
-      reject?: (reason: unknown) => unknown
-    ) => Promise.resolve(result).then(resolve, reject),
-  };
-  return self;
-}
 
 describe("createExpense", () => {
   beforeEach(() => {
@@ -123,40 +107,13 @@ describe("createExpense", () => {
     expect(fromMock).not.toHaveBeenCalled();
   });
 
-  it("rolls back orphan expense when legacy participant insert fails", async () => {
+  it("fails closed when create_expense_atomic is missing (no legacy path)", async () => {
     getAuthUser.mockResolvedValue({ id: "u1", email: "u@test.com" });
     requireGroupMember.mockResolvedValue({ ok: true, role: "admin" });
     assertMembersOfGroup.mockResolvedValue({ ok: true });
     rpc.mockResolvedValue({
       data: null,
       error: { code: "PGRST202", message: "Could not find the function" },
-    });
-
-    const deleted: string[] = [];
-    fromMock.mockImplementation((table: string) => {
-      if (table === "expenses") {
-        return {
-          insert: () => ({
-            select: () => ({
-              single: async () => ({ data: { id: "orphan-e1" }, error: null }),
-            }),
-          }),
-          delete: () => ({
-            eq: (_col: string, id: string) => {
-              deleted.push(id);
-              return Promise.resolve({ error: null });
-            },
-          }),
-        };
-      }
-      if (table === "expense_participants") {
-        return {
-          insert: async () => ({
-            error: { message: "FK boom", code: "23503" },
-          }),
-        };
-      }
-      return chain({ data: null, error: null });
     });
 
     const fd = new FormData();
@@ -167,9 +124,8 @@ describe("createExpense", () => {
     fd.append("participant_ids", "u1");
 
     const result = await createExpense("g1", fd);
-    expect(result.error).toMatch(/could not create expense/i);
-    expect(result.error).not.toMatch(/FK boom|23503/);
-    expect(deleted).toContain("orphan-e1");
+    expect(result.error).toBe(MIGRATION_REQUIRED_MESSAGE);
+    expect(fromMock).not.toHaveBeenCalled();
   });
 
   it("rejects exact splits that do not total the amount", async () => {
@@ -212,5 +168,27 @@ describe("createExpense", () => {
       "update_expense_atomic",
       expect.objectContaining({ p_expense_id: "e1", p_group_id: "g1" })
     );
+  });
+
+  it("fails closed when update_expense_atomic is missing", async () => {
+    getAuthUser.mockResolvedValue({ id: "u1", email: "u@test.com" });
+    requireGroupMember.mockResolvedValue({ ok: true, role: "admin" });
+    assertMembersOfGroup.mockResolvedValue({ ok: true });
+    rpc.mockResolvedValue({
+      data: null,
+      error: { code: "PGRST202", message: "Could not find the function" },
+    });
+
+    const fd = new FormData();
+    fd.set("title", "Dinner");
+    fd.set("amount", "20.00");
+    fd.set("paid_by", "u1");
+    fd.set("split_type", "equal");
+    fd.set("expense_date", "2026-01-01");
+    fd.append("participant_ids", "u1");
+
+    const result = await updateExpense("e1", "g1", fd);
+    expect(result.error).toBe(MIGRATION_REQUIRED_MESSAGE);
+    expect(fromMock).not.toHaveBeenCalled();
   });
 });

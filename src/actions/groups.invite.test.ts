@@ -35,6 +35,7 @@ vi.mock("next/navigation", () => ({
   }),
 }));
 
+import { MIGRATION_REQUIRED_MESSAGE } from "@/lib/service";
 import { acceptInvite, createInvite } from "./groups";
 
 function chain(result: { data?: unknown; error?: unknown }) {
@@ -152,5 +153,17 @@ describe("acceptInvite via RPC", () => {
     rpc.mockResolvedValue({ data: "g1", error: null });
 
     await expect(acceptInvite("tok")).rejects.toThrow("REDIRECT:/groups/g1");
+  });
+
+  it("fails closed when accept_invite RPC is missing", async () => {
+    getAuthUser.mockResolvedValue({ id: "u1", email: "u@test.com" });
+    rpc.mockResolvedValue({
+      data: null,
+      error: { code: "PGRST202", message: "Could not find the function" },
+    });
+
+    const result = await acceptInvite("tok");
+    expect(result?.error).toBe(MIGRATION_REQUIRED_MESSAGE);
+    expect(fromMock).not.toHaveBeenCalled();
   });
 });

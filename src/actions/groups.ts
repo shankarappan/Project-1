@@ -9,12 +9,11 @@ import {
   requireGroupAdmin,
 } from "@/lib/auth/membership";
 import { userFacingActionError } from "@/lib/logging/safe-error";
+import {
+  isRpcMissing,
+  MIGRATION_REQUIRED_MESSAGE,
+} from "@/lib/service";
 import { randomBytes } from "crypto";
-
-function isUniqueViolation(error: { code?: string; message?: string } | null) {
-  if (!error) return false;
-  return error.code === "23505" || /duplicate key|unique constraint/i.test(error.message ?? "");
-}
 
 export async function createGroup(formData: FormData): Promise<void> {
   const user = await getAuthUser();
@@ -33,9 +32,8 @@ export async function createGroup(formData: FormData): Promise<void> {
   const clientRequestId =
     String(formData.get("client_request_id") ?? "").trim() || null;
 
-  // Idempotency is database-backed only (unique index + RPC). Vercel has
-  // multiple ephemeral instances — never rely on process memory for exactly-once.
-  // Prefer atomic RPC (migration 003). Fall back for environments not yet migrated.
+  // Database-backed idempotency only (unique index + RPC). Fail closed if
+  // migration 003 is missing — no non-idempotent legacy insert path.
   const { data: rpcGroupId, error: rpcError } = await supabase.rpc(
     "create_group_atomic",
     {
@@ -50,80 +48,16 @@ export async function createGroup(formData: FormData): Promise<void> {
     redirect(`/groups/${rpcGroupId}`);
   }
 
-  const rpcMissing =
-    rpcError?.code === "PGRST202" ||
-    /create_group_atomic|could not find the function/i.test(rpcError?.message ?? "");
-
-  if (rpcError && !rpcMissing) {
-    throw new Error(rpcError.message);
+  if (isRpcMissing(rpcError)) {
+    throw new Error(MIGRATION_REQUIRED_MESSAGE);
   }
 
-  if (clientRequestId) {
-    const { data: existing } = await supabase
-      .from("groups")
-      .select("id")
-      .eq("created_by", user.id)
-      .eq("client_request_id", clientRequestId)
-      .maybeSingle();
-
-    if (existing?.id) {
-      revalidatePath("/dashboard");
-      redirect(`/groups/${existing.id}`);
-    }
-  }
-
-  let { data: group, error } = await supabase
-    .from("groups")
-    .insert({
-      name,
-      created_by: user.id,
-      ...(clientRequestId ? { client_request_id: clientRequestId } : {}),
-    })
-    .select("id")
-    .single();
-
-  // Pre-migration environments may not have client_request_id yet.
-  if (
-    error &&
-    clientRequestId &&
-    /client_request_id/i.test(error.message ?? "")
-  ) {
-    ({ data: group, error } = await supabase
-      .from("groups")
-      .insert({ name, created_by: user.id })
-      .select("id")
-      .single());
-  }
-
-  if (error || !group) {
-    if (clientRequestId && isUniqueViolation(error)) {
-      const { data: existing } = await supabase
-        .from("groups")
-        .select("id")
-        .eq("created_by", user.id)
-        .eq("client_request_id", clientRequestId)
-        .maybeSingle();
-
-      if (existing?.id) {
-        revalidatePath("/dashboard");
-        redirect(`/groups/${existing.id}`);
-      }
-    }
-    throw new Error(error?.message ?? "Failed to create group.");
-  }
-
-  const { error: memberError } = await supabase.from("group_members").insert({
-    group_id: group.id,
-    user_id: user.id,
-    role: "admin",
-  });
-
-  if (memberError && !isUniqueViolation(memberError)) {
-    throw new Error(memberError.message);
-  }
-
-  revalidatePath("/dashboard");
-  redirect(`/groups/${group.id}`);
+  const { userMessage } = userFacingActionError(
+    "create_group_failed",
+    rpcError,
+    "Could not create group."
+  );
+  throw new Error(userMessage);
 }
 
 export async function getUserGroups() {
@@ -280,43 +214,9 @@ export async function acceptInvite(token: string) {
     redirect(`/groups/${groupId}`);
   }
 
-  const rpcMissing =
-    error?.code === "PGRST202" ||
-    /accept_invite|could not find the function/i.test(error?.message ?? "");
-
-  if (error && !rpcMissing) {
-    return { error: mapAcceptInviteError(error.message) };
+  if (isRpcMissing(error)) {
+    return { error: MIGRATION_REQUIRED_MESSAGE };
   }
 
-  // Pre-migration fallback only. After 003, direct membership insert is denied
-  // for non-creators — deploy migration before relying on invites in production.
-  const { data: invite, error: inviteError } = await supabase
-    .from("invites")
-    .select("*")
-    .eq("invite_token", token)
-    .is("accepted_by", null)
-    .maybeSingle();
-
-  if (inviteError || !invite) {
-    return { error: "Invite not found, expired, or already used." };
-  }
-
-  if (invite.expires_at && new Date(invite.expires_at) < new Date()) {
-    return { error: "This invite has expired." };
-  }
-
-  if (invite.email) {
-    const signedInEmail = user!.email?.toLowerCase();
-    if (!signedInEmail || signedInEmail !== invite.email.toLowerCase()) {
-      return {
-        error:
-          "This invite is for a different email address. Sign in with that email to join.",
-      };
-    }
-  }
-
-  return {
-    error:
-      "Invite acceptance requires database migration 003 (accept_invite). Ask an admin to apply it.",
-  };
+  return { error: mapAcceptInviteError(error?.message ?? "") };
 }

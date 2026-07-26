@@ -16,6 +16,10 @@ import {
   requireGroupMember,
 } from "@/lib/auth/membership";
 import { userFacingActionError } from "@/lib/logging/safe-error";
+import {
+  isRpcMissing,
+  MIGRATION_REQUIRED_MESSAGE,
+} from "@/lib/service";
 import type { SplitType } from "@/lib/types/database";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -78,16 +82,6 @@ function participantPayload(splits: SplitRow[]) {
     share_percentage:
       split.sharePercentage == null ? "" : String(split.sharePercentage),
   }));
-}
-
-function isRpcMissing(error: { code?: string; message?: string } | null) {
-  if (!error) return false;
-  return (
-    error.code === "PGRST202" ||
-    /could not find the function|create_expense_atomic|update_expense_atomic/i.test(
-      error.message ?? ""
-    )
-  );
 }
 
 async function parseExpenseForm(
@@ -222,86 +216,16 @@ export async function createExpense(groupId: string, formData: FormData) {
     redirect(`/groups/${groupId}`);
   }
 
-  if (error && !isRpcMissing(error)) {
-    const { userMessage } = userFacingActionError(
-      "create_expense_failed",
-      error,
-      "Could not create expense."
-    );
-    return { error: userMessage };
+  if (isRpcMissing(error)) {
+    return { error: MIGRATION_REQUIRED_MESSAGE };
   }
 
-  // Pre-migration fallback — best-effort compensating delete (not fully atomic).
-  return createExpenseLegacy(supabase, {
-    groupId,
-    userId: user.id,
-    ...parsed,
-  });
-}
-
-async function createExpenseLegacy(
-  supabase: SupabaseClient,
-  args: {
-    groupId: string;
-    userId: string;
-    title: string;
-    description: string | null;
-    amount: number;
-    currency: string;
-    paidBy: string;
-    splitType: SplitType;
-    expenseDate: string;
-    splits: SplitRow[];
-  }
-) {
-  const { data: expense, error } = await supabase
-    .from("expenses")
-    .insert({
-      group_id: args.groupId,
-      paid_by: args.paidBy,
-      created_by: args.userId,
-      title: args.title,
-      description: args.description,
-      amount: args.amount,
-      currency: args.currency,
-      split_type: args.splitType,
-      expense_date: args.expenseDate,
-    })
-    .select("id")
-    .single();
-
-  if (error || !expense) {
-    const { userMessage } = userFacingActionError(
-      "create_expense_legacy_failed",
-      error,
-      "Could not create expense."
-    );
-    return { error: userMessage };
-  }
-
-  const { error: participantError } = await supabase
-    .from("expense_participants")
-    .insert(
-      args.splits.map((split) => ({
-        expense_id: expense.id,
-        user_id: split.userId,
-        share_amount: split.shareAmount,
-        share_percentage: split.sharePercentage,
-      }))
-    );
-
-  if (participantError) {
-    await supabase.from("expenses").delete().eq("id", expense.id);
-    const { userMessage } = userFacingActionError(
-      "create_expense_participants_failed",
-      participantError,
-      "Could not create expense."
-    );
-    return { error: userMessage };
-  }
-
-  revalidatePath(`/groups/${args.groupId}`);
-  redirect(`/groups/${args.groupId}`);
+  const { userMessage } = userFacingActionError(
+    "create_expense_failed",
+    error,
+    "Could not create expense."
+  );
+  return { error: userMessage };
 }
 
 export async function updateExpense(
@@ -342,62 +266,16 @@ export async function updateExpense(
     return { success: true };
   }
 
-  if (!isRpcMissing(error)) {
-    const { userMessage } = userFacingActionError(
-      "update_expense_failed",
-      error,
-      "Could not update expense."
-    );
-    return { error: userMessage };
+  if (isRpcMissing(error)) {
+    return { error: MIGRATION_REQUIRED_MESSAGE };
   }
 
-  // Pre-migration: non-atomic — prefer RPC in production.
-  const { error: updateError } = await supabase
-    .from("expenses")
-    .update({
-      title: parsed.title,
-      description: parsed.description,
-      amount: parsed.amount,
-      paid_by: parsed.paidBy,
-      split_type: parsed.splitType,
-      expense_date: parsed.expenseDate,
-    })
-    .eq("id", expenseId);
-
-  if (updateError) {
-    const { userMessage } = userFacingActionError(
-      "update_expense_legacy_failed",
-      updateError,
-      "Could not update expense."
-    );
-    return { error: userMessage };
-  }
-
-  await supabase.from("expense_participants").delete().eq("expense_id", expenseId);
-
-  const { error: participantError } = await supabase
-    .from("expense_participants")
-    .insert(
-      parsed.splits.map((split) => ({
-        expense_id: expenseId,
-        user_id: split.userId,
-        share_amount: split.shareAmount,
-        share_percentage: split.sharePercentage,
-      }))
-    );
-
-  if (participantError) {
-    const { userMessage } = userFacingActionError(
-      "update_expense_participants_failed",
-      participantError,
-      "Could not update expense splits. Please retry."
-    );
-    return { error: userMessage };
-  }
-
-  revalidatePath(`/groups/${groupId}`);
-  revalidatePath(`/groups/${groupId}/expenses/${expenseId}`);
-  return { success: true };
+  const { userMessage } = userFacingActionError(
+    "update_expense_failed",
+    error,
+    "Could not update expense."
+  );
+  return { error: userMessage };
 }
 
 export async function deleteExpense(expenseId: string, groupId: string) {
