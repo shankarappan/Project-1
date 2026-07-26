@@ -32,6 +32,8 @@ export async function createGroup(formData: FormData): Promise<void> {
   const clientRequestId =
     String(formData.get("client_request_id") ?? "").trim() || null;
 
+  // Idempotency is database-backed only (unique index + RPC). Vercel has
+  // multiple ephemeral instances — never rely on process memory for exactly-once.
   // Prefer atomic RPC (migration 003). Fall back for environments not yet migrated.
   const { data: rpcGroupId, error: rpcError } = await supabase.rpc(
     "create_group_atomic",

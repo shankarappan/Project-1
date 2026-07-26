@@ -12,7 +12,10 @@
 -- 3. Verify create-group, invite, accept-invite, expense flows.
 -- 4. Apply to production, then deploy app code that depends on these objects.
 
--- Idempotency for duplicate group form submissions
+-- Idempotency for duplicate group form submissions (AUTHORITATIVE guarantee).
+-- App servers (including multiple Vercel isolates) must NOT use process memory
+-- for exactly-once create; this unique index + create_group_atomic is the source
+-- of truth across concurrent / cross-instance requests.
 alter table public.groups
   add column if not exists client_request_id text;
 
