@@ -1,0 +1,127 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-stone: var(--stone);
+  --color-stone-deep: var(--stone-deep);
+  --color-brass: var(--brass);
+  --color-brass-deep: var(--brass-deep);
+  --color-cream: var(--cream);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-ring: var(--ring);
+  --font-sans: var(--font-body);
+  --font-display: var(--font-display);
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+}
+
+:root {
+  --ink: #0b1f33;
+  --ink-soft: #1a3349;
+  --stone: #f3efe8;
+  --stone-deep: #e7e0d4;
+  --brass: #b08d57;
+  --brass-deep: #8f7142;
+  --cream: #faf8f4;
+  --background: #faf8f4;
+  --foreground: #0b1f33;
+  --muted: #ebe6dc;
+  --muted-foreground: #5c6b78;
+  --border: #d9d1c3;
+  --ring: #b08d57;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    background-image:
+      radial-gradient(ellipse 120% 80% at 0% 0%, rgb(176 141 87 / 8%), transparent 50%),
+      radial-gradient(ellipse 90% 60% at 100% 10%, rgb(11 31 51 / 6%), transparent 45%),
+      linear-gradient(180deg, var(--cream), var(--stone));
+    background-attachment: fixed;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--brass) 35%, white);
+    color: var(--ink);
+  }
+}
+
+@layer utilities {
+  .font-display {
+    font-family: var(--font-display), ui-serif, Georgia, serif;
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .surface-panel {
+    background:
+      linear-gradient(180deg, rgb(255 255 255 / 72%), rgb(255 255 255 / 48%)),
+      var(--cream);
+  }
+
+  .ink-panel {
+    background:
+      radial-gradient(ellipse 80% 60% at 20% 0%, rgb(176 141 87 / 18%), transparent 55%),
+      linear-gradient(160deg, var(--ink) 0%, var(--ink-soft) 100%);
+  }
+
+  .reveal {
+    animation: reveal-up 0.8s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .reveal-delay-1 {
+    animation-delay: 0.12s;
+  }
+
+  .reveal-delay-2 {
+    animation-delay: 0.24s;
+  }
+
+  .reveal-delay-3 {
+    animation-delay: 0.36s;
+  }
+}
+
+@keyframes reveal-up {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes nav-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.site-header {
+  animation: nav-in 0.55s ease-out both;
+}
