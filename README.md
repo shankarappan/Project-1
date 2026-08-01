@@ -2,6 +2,8 @@
 
 A Splitwise-style expense sharing web app built with Next.js and Supabase. Track shared costs across groups, split bills equally or by exact amount/percentage, view balances, and record settlements.
 
+> **Related project:** a separate Meridian Partners marketing site lives in [`meridian-partners/`](./meridian-partners) and does not modify this app.
+
 ## Tech stack
 
 | Layer | Choice |
